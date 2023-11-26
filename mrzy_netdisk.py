@@ -1,0 +1,311 @@
+#!/usr/bin/env python3
+
+import base64
+import collections
+import getopt
+import hashlib
+import io
+import json
+import mimetypes
+import os.path
+import random
+import sys
+import time
+import urllib.request
+
+UPLOAD_SPLIT_CHUNK_SIZE = 1 << 20
+
+def get_upload_sign(json_data):
+    return hashlib.md5(
+        base64.b64encode(
+            json.dumps(
+                json_data,
+                separators=(',', ':')
+            ).encode()
+        ) +
+        b"IF75D4U19LKLDAZSMPN5ATQLGBFEJL4VIL2STVDBNJJTO6LNOGB265CR40I4AL13"
+    ).hexdigest()
+
+def get_default_upload_filename(src_filename, uid):
+    # (work|file)/(image|audio|video|other)/(student|teacher|other)/....
+    return "file/other/student/{}_{}_{}_{}".format(
+        int(time.time()), uid,
+        random.randint(0, 99999999),
+        os.path.splitext(src_filename)[1]
+    )
+
+def get_upload_token(rmt_filename, upload_sign, user_token):
+    result_json = json.load(
+        urllib.request.urlopen(
+            urllib.request.Request(
+                "https://lulu.lulufind.com/mrzy/mrzypc/getQiniuTokenV2",
+                headers={
+                    "token": user_token,
+                    "sign": upload_sign
+                },
+                data=f"keys={rmt_filename}".encode()
+            )
+        )
+    )
+
+    if result_json["code"] != 200:
+        raise Exception("Error while fetching upload token")
+
+    return result_json["data"][rmt_filename]
+
+# from ikunpan.py
+def print_progress(cur_size, total_size, speed):
+    pbar = int(33 * (cur_size / total_size))
+
+    res_str = "     [{:<33}]{:>35}     ".format(
+        '=' * (pbar - 1) + '>' * bool(pbar),
+            "{} / {}  {}/s".format(
+            size_to_human_readable(cur_size),
+            size_to_human_readable(total_size),
+            size_to_human_readable(speed)
+        )
+    )
+    print(res_str, end='\r')
+
+def size_to_human_readable(size):
+    suffixes = ['B', "KiB", "MiB", "GiB", "TiB", "EiB", "ZiB", "YiB"]
+    suffix = 0
+
+    while size >= 1024 and suffix <= 7:
+        size /= 1024
+        suffix += 1
+
+    return "{:.2f} {}".format(size, suffixes[suffix])
+
+def upload_file(src_filename, rmt_filename, file_type, user_token, upload_token):
+    base64_encoded_rmt_filename = base64.b64encode(rmt_filename.encode()).decode()
+    file_type = file_type or mimetypes.guess_type(src_filename)[0] or "application/octet-stream"
+
+    print("Preparing upload...")
+    post_upload_begin_json = json.load(
+        urllib.request.urlopen(
+            urllib.request.Request(
+                "https://upload-z2.qiniup.com/"
+                "buckets/mrzy/objects/{}/uploads".format(
+                    base64_encoded_rmt_filename
+                ),
+                headers={"Authorization": "UpToken " + upload_token},
+                data=b""
+            )
+        )
+    )
+
+    multipart_upload_uploadid = post_upload_begin_json["uploadId"]
+
+    file = open(src_filename, "rb")
+    buffer = memoryview(bytearray(UPLOAD_SPLIT_CHUNK_SIZE))
+    partnum = 0
+    uploaded = 0
+    etags = []
+
+    file.seek(0, io.SEEK_END)
+    file_size = file.tell()
+    file.seek(0, io.SEEK_SET)
+
+    begin_time = time.time()
+    print("Uploading...")
+    while size := file.readinto(buffer):
+        print_progress(uploaded, file_size, uploaded / (time.time() - begin_time))
+        partnum += 1
+        response_json = json.load(
+            urllib.request.urlopen(
+                urllib.request.Request(
+                    "https://upload-z2.qiniup.com/"
+                    "buckets/mrzy/objects/{}/uploads/{}/{}".format(
+                        base64_encoded_rmt_filename,
+                        multipart_upload_uploadid,
+                        partnum
+                    ),
+                    data=buffer,
+                    headers={
+                        "Authorization": "UpToken " + upload_token,
+                        "Content-Type": "application/octet-stream",
+                        "Content-MD5": hashlib.md5(buffer[:size]).hexdigest(),
+                        "Content-Length": size
+                    },
+                    method="PUT"
+                )
+            )
+        )
+        etags.append(response_json["etag"])
+        uploaded += size
+
+
+    print_progress(uploaded, file_size, uploaded / (time.time() - begin_time))
+    print()
+    file.close()
+
+    multipart_complete_json = {
+        "fname": rmt_filename,
+        "mimeType": file_type,
+        "parts": []
+    }
+
+    multipart_complete_json["parts"].extend(
+        map(
+            lambda part_etag: {"etag": part_etag[1], "partNumber": part_etag[0] + 1},
+            enumerate(etags)
+        )
+    )
+
+    multipart_complete_response_json = json.load(
+        urllib.request.urlopen(
+            urllib.request.Request(
+                "https://upload-z2.qiniup.com/"
+                "buckets/mrzy/objects/{}/uploads/{}".format(
+                    base64_encoded_rmt_filename,
+                    multipart_upload_uploadid
+                ),
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": "UpToken " + upload_token
+                },
+                data=json.dumps(multipart_complete_json).encode()
+            )
+        )
+    )
+
+    print("Commiting to mrzy...")
+    commit_to_mrzy(src_filename, rmt_filename, file_size, user_token)
+
+    return "https://img2.lulufind.com/" + rmt_filename
+
+def commit_to_mrzy(src_filename, rmt_filename, file_size, user_token):
+    file_info = {
+        "name": os.path.basename(src_filename),
+        "type": os.path.splitext(src_filename)[1],
+        "size": str(file_size),
+        "fileUrl": "https://img2.lulufind.com/" + rmt_filename
+    }
+
+    result_json = json.load(
+        urllib.request.urlopen(
+            urllib.request.Request(
+                "https://lulu.lulufind.com/mrzy/mrzypc/addUserFile",
+                headers={
+                    "token": user_token,
+                    "sign": get_upload_sign(file_info)
+                },
+                data="&".join(map("=".join, file_info.items())).encode()
+            )
+        )
+    )
+
+    return result_json
+
+def login_to_mrzy(username, password):
+    response_json = json.load(
+        urllib.request.urlopen(
+            urllib.request.Request(
+                "https://api-prod.lulufind.com/api/v1/auth/pwdlogin",
+                headers={"Content-Type": "application/json"},
+                data=json.dumps(
+                    {"login": username, "password": password}
+                ).encode()
+            )
+        )
+    )
+
+    if response_json["code"] != 200:
+        raise Exception("Error while logging in")
+
+    return (
+        response_json["data"]["token"],
+        response_json["data"]["openId"]
+    )
+
+def upload_front(src_filename, rmt_filename, file_type, user_token, uid):
+    if rmt_filename is None:
+        rmt_filename = get_default_upload_filename(src_filename, uid)
+
+    print("Getting upload sign...")
+    upload_sign = get_upload_sign({"keys": rmt_filename})
+
+    print("Getting upload token...")
+    upload_token = get_upload_token(rmt_filename, upload_sign, user_token)
+
+    return upload_file(src_filename, rmt_filename, file_type, user_token, upload_token)
+
+def print_help(prog_name):
+    print(f"Usage: {prog_name} [OPTIONS]..")
+    print("Upload files to MeiRiZuoYe.")
+    print()
+    print("Note: before using this tool, make sure")
+    print("you have bound a password account!")
+    print()
+    print("  -u, --user     <USERNAME>    Username for login")
+    print("  -p, --pass     <PASSWORD>    Password for login")
+    print("  -s, --passfile <PASSFILE>    File with username and password")
+    print("                 (format: <username> <password>)")
+    print("  -f, --file <FILENAME>        File to upload")
+    print("  -t, --type <MIMETYPE>        The type of file, in MIME")
+    print("  -r, --remote <RFILENAME>     Remote file name")
+    print("                 (be careful when using this option,")
+    print("                  you may overwrite other files!)")
+    print("  -h, --help       Display this help")
+
+def main(argc, argv):
+    if argc == 1:
+        print_help(argv[0])
+        return 1
+
+    username, password = None, None
+    user_token = None
+    file_entry = collections.namedtuple("FileEntry", "src_filename rmt_filename file_type")
+    command_line = getopt.getopt(
+        argv[1:],
+        "u:p:s:f:t:r:",
+        [
+            "user=", "pass=",
+            "passfile=", "file=",
+            "type=", "remote="
+        ]
+    )
+    file_to_upload = []
+
+    for option, argument in command_line[0]:
+        if option in ("-u", "--user"):
+            username = argument
+
+        elif option in ("-p", "--pass"):
+            password = argument
+
+        elif option in ("-s", "--passfile"):
+            username, argument = open(argument).readline().strip().split()
+
+        elif option in ("-f", "--file"):
+            file_to_upload.append(file_entry(argument, None, None))
+
+        elif option in ("-t", "--type"):
+            file_to_upload[-1] = file_to_upload[-1]._replace(type=argument)
+
+        elif option in ("-r", "--remote"):
+            file_to_upload[-1] = file_to_upload[-1]._replace(rmt_filename=argument)
+
+        elif option in ("-h", "--help"):
+            print_help(argv[0])
+            return 0
+
+    if username is None or password is None:
+        print("Please specify username and password!")
+
+    user_token, uid = login_to_mrzy(username, password)
+
+    for file in file_to_upload:
+        print(f"Uploading {file.src_filename}...")
+        result = upload_front(
+            file.src_filename, file.rmt_filename,
+            file.file_type, user_token, uid
+        )
+        print("File uploaded.")
+        print(f"Link: {result}")
+
+    return 0
+
+if __name__ == "__main__":
+    sys.exit(main(len(sys.argv), sys.argv))
