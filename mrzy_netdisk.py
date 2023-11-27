@@ -170,8 +170,8 @@ def upload_file(src_filename, rmt_filename, file_type, user_token, upload_token)
         )
     )
 
-    print("Commiting to mrzy...")
-    commit_to_mrzy(src_filename, rmt_filename, file_size, user_token)
+##    print("Commiting to mrzy...")
+##    commit_to_mrzy(src_filename, rmt_filename, file_size, user_token)
 
     return "https://img2.lulufind.com/" + rmt_filename
 
