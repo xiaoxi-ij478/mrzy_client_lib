@@ -33,7 +33,7 @@ def get_default_upload_filename(src_filename):
         # for privacy
         "u0000000000000000",
         random.randint(0, 99999999),
-        os.path.splitext(src_filename)[1]
+        os.path.splitext("" if src_filename == 0 else src_filename)[1]
     )
 
 def get_upload_token(rmt_filename, upload_sign, user_token):
@@ -56,11 +56,27 @@ def get_upload_token(rmt_filename, upload_sign, user_token):
     return result_json["data"][rmt_filename]
 
 # from ikunpan.py
+_roll_pos = 0
+_minus = True
 def print_progress(cur_size, total_size, speed):
-    pbar = int(33 * (cur_size / total_size))
+    global _roll_pos
+    global _minus
+
+    if total_size == 0:
+        tbar = (' ' * _roll_pos) + "<=>" + (' ' * (30 - _roll_pos))
+        if _roll_pos == 30 or _roll_pos == 0:
+            _minus = not _minus
+
+        if _minus:
+            _roll_pos -= 1
+        else:
+            _roll_pos += 1
+    else:
+        pbar = int(33 * (cur_size / total_size))
+        tbar = '=' * (pbar - 1) + '>' * bool(pbar)
 
     res_str = "     [{:<33}]{:>35}     ".format(
-        '=' * (pbar - 1) + '>' * bool(pbar),
+        tbar,
             "{} / {}  {}/s".format(
             size_to_human_readable(cur_size),
             size_to_human_readable(total_size),
@@ -79,9 +95,14 @@ def size_to_human_readable(size):
 
     return "{:.2f} {}".format(size, suffixes[suffix])
 
-def upload_file(src_filename, rmt_filename, file_type, user_token, upload_token):
+def upload_file(src_filename, rmt_filename, file_type, upload_token):
+    if src_filename != 0:
+        if not os.access(src_filename, os.R_OK):
+            print(f"File {src_filename} can't be read!")
+            return ""
+
     base64_encoded_rmt_filename = base64.b64encode(rmt_filename.encode()).decode()
-    file_type = file_type or mimetypes.guess_type(src_filename)[0] or "application/octet-stream"
+    file_type = file_type or mimetypes.guess_type("" if src_filename == 0 else src_filename)[0] or "application/octet-stream"
 
     print("Preparing upload...")
     post_upload_begin_json = json.load(
@@ -105,9 +126,12 @@ def upload_file(src_filename, rmt_filename, file_type, user_token, upload_token)
     uploaded = 0
     etags = []
 
-    file.seek(0, io.SEEK_END)
-    file_size = file.tell()
-    file.seek(0, io.SEEK_SET)
+    if src_filename != 0:
+        file.seek(0, io.SEEK_END)
+        file_size = file.tell()
+        file.seek(0, io.SEEK_SET)
+    else:
+        file_size = 0
 
     begin_time = time.time()
     print("Uploading...")
@@ -137,10 +161,12 @@ def upload_file(src_filename, rmt_filename, file_type, user_token, upload_token)
         etags.append(response_json["etag"])
         uploaded += size
 
-
     print_progress(uploaded, file_size, uploaded / (time.time() - begin_time))
     print()
-    file.close()
+
+    # do not close stdin
+    if src_filename != 0:
+        file.close()
 
     multipart_complete_json = {
         "fname": rmt_filename,
@@ -228,7 +254,7 @@ def upload_front(src_filename, rmt_filename, file_type, user_token):
     print("Getting upload token...")
     upload_token = get_upload_token(rmt_filename, upload_sign, user_token)
 
-    return upload_file(src_filename, rmt_filename, file_type, user_token, upload_token)
+    return upload_file(src_filename, rmt_filename, file_type, upload_token)
 
 def print_help(prog_name):
     print(f"Usage: {prog_name} [OPTIONS]..")
@@ -242,6 +268,7 @@ def print_help(prog_name):
     print("  -s, --passfile <PASSFILE>    File with username and password")
     print("                 (format: <username> <password>)")
     print("  -f, --file <FILENAME>        File to upload")
+    print("                 (use '-' to read from stdin)")
     print("  -t, --type <MIMETYPE>        The type of file, in MIME")
     print("  -r, --remote <RFILENAME>     Remote file name")
     print("                 (be careful when using this option,")
@@ -278,6 +305,9 @@ def main(argc, argv):
             username, password = open(argument).readline().strip().split(maxsplit=1)
 
         elif option in ("-f", "--file"):
+            if argument == '-':
+                argument = 0
+
             file_to_upload.append(file_entry(argument, None, None))
 
         elif option in ("-t", "--type"):
@@ -296,7 +326,7 @@ def main(argc, argv):
     user_token = login_to_mrzy(username, password)
 
     for file in file_to_upload:
-        print(f"Uploading {file.src_filename}...")
+        print(f"Uploading {'STDIN' if file.src_filename == 0 else file.src_filename}...")
         result = upload_front(
             file.src_filename, file.rmt_filename,
             file.file_type, user_token
