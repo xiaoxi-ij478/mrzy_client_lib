@@ -26,10 +26,12 @@ def get_upload_sign(json_data):
         b"IF75D4U19LKLDAZSMPN5ATQLGBFEJL4VIL2STVDBNJJTO6LNOGB265CR40I4AL13"
     ).hexdigest()
 
-def get_default_upload_filename(src_filename, uid):
+def get_default_upload_filename(src_filename):
     # (work|file)/(image|audio|video|other)/(student|teacher|other)/....
     return "file/other/student/{}_{}_{}_{}".format(
-        int(time.time()), uid,
+        int(time.time()),
+        # for privacy
+        "u0000000000000000",
         random.randint(0, 99999999),
         os.path.splitext(src_filename)[1]
     )
@@ -214,14 +216,11 @@ def login_to_mrzy(username, password):
     if response_json["code"] != 200:
         raise Exception("Error while logging in")
 
-    return (
-        response_json["data"]["token"],
-        response_json["data"]["openId"]
-    )
+    return response_json["data"]["token"]
 
-def upload_front(src_filename, rmt_filename, file_type, user_token, uid):
+def upload_front(src_filename, rmt_filename, file_type, user_token):
     if rmt_filename is None:
-        rmt_filename = get_default_upload_filename(src_filename, uid)
+        rmt_filename = get_default_upload_filename(src_filename)
 
     print("Getting upload sign...")
     upload_sign = get_upload_sign({"keys": rmt_filename})
@@ -294,13 +293,13 @@ def main(argc, argv):
     if username is None or password is None:
         print("Please specify username and password!")
 
-    user_token, uid = login_to_mrzy(username, password)
+    user_token = login_to_mrzy(username, password)
 
     for file in file_to_upload:
         print(f"Uploading {file.src_filename}...")
         result = upload_front(
             file.src_filename, file.rmt_filename,
-            file.file_type, user_token, uid
+            file.file_type, user_token
         )
         print("File uploaded.")
         print(f"Link: {result}")
