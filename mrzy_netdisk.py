@@ -276,7 +276,7 @@ def main(argc, argv):
             password = argument
 
         elif option in ("-s", "--passfile"):
-            username, password = open(argument).readline().strip().split()
+            username, password = open(argument).readline().strip().split(maxsplit=1)
 
         elif option in ("-f", "--file"):
             file_to_upload.append(file_entry(argument, None, None))
