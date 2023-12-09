@@ -13,7 +13,7 @@ import sys
 import time
 import urllib.request
 
-UPLOAD_SPLIT_CHUNK_SIZE = 1 << 20
+UPLOAD_SPLIT_CHUNK_SIZE = 6 * 1024 * 1024
 
 def get_upload_sign(json_data):
     return hashlib.md5(
@@ -63,8 +63,8 @@ def print_progress(cur_size, total_size, speed):
     global _minus
 
     if total_size == 0:
-        tbar = (' ' * _roll_pos) + "<=>" + (' ' * (30 - _roll_pos))
-        if _roll_pos == 30 or _roll_pos == 0:
+        tbar = (' ' * _roll_pos) + "<=>" + (' ' * (26 - _roll_pos))
+        if _roll_pos == 26 or _roll_pos == 0:
             _minus = not _minus
 
         if _minus:
@@ -72,12 +72,13 @@ def print_progress(cur_size, total_size, speed):
         else:
             _roll_pos += 1
     else:
-        pbar = int(33 * (cur_size / total_size))
+        pbar = int(29 * (cur_size / total_size))
         tbar = '=' * (pbar - 1) + '>' * bool(pbar)
 
-    res_str = "     [{:<33}]{:>35}     ".format(
+    res_str = "     {:>4}[{:<29}]{:>35}     ".format(
+        "" if not total_size else "{:.1f}%".format(cur_size / total_size),
         tbar,
-            "{} / {}  {}/s".format(
+        "{} / {}  {}/s".format(
             size_to_human_readable(cur_size),
             size_to_human_readable(total_size),
             size_to_human_readable(speed)
@@ -171,14 +172,15 @@ def upload_file(src_filename, rmt_filename, file_type, upload_token):
     multipart_complete_json = {
         "fname": rmt_filename,
         "mimeType": file_type,
-        "parts": []
+        "parts": list(  
+            map(
+                lambda part_etag: {"etag": part_etag[1], "partNumber": part_etag[0] + 1},
+                enumerate(etags)
+            )
+        )
     }
 
     multipart_complete_json["parts"].extend(
-        map(
-            lambda part_etag: {"etag": part_etag[1], "partNumber": part_etag[0] + 1},
-            enumerate(etags)
-        )
     )
 
     multipart_complete_response_json = json.load(
