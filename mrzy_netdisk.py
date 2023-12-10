@@ -324,6 +324,7 @@ def main(argc, argv):
 
     if username is None or password is None:
         print("Please specify username and password!")
+        return 0
 
     user_token = login_to_mrzy(username, password)
 
