@@ -63,8 +63,8 @@ def print_progress(cur_size, total_size, speed):
     global _minus
 
     if total_size == 0:
-        tbar = (' ' * _roll_pos) + "<=>" + (' ' * (26 - _roll_pos))
-        if _roll_pos == 26 or _roll_pos == 0:
+        tbar = (' ' * _roll_pos) + "<=>" + (' ' * (24 - _roll_pos))
+        if _roll_pos == 24 or _roll_pos == 0:
             _minus = not _minus
 
         if _minus:
@@ -72,11 +72,11 @@ def print_progress(cur_size, total_size, speed):
         else:
             _roll_pos += 1
     else:
-        pbar = int(29 * (cur_size / total_size))
+        pbar = int(27 * (cur_size / total_size))
         tbar = '=' * (pbar - 1) + '>' * bool(pbar)
 
-    res_str = "     {:>4}[{:<29}]{:>35}     ".format(
-        "" if not total_size else "{:.1f}%".format(cur_size / total_size),
+    res_str = "     {:>6}[{:<27}]{:>35}     ".format(
+        "" if not total_size else "{:.1f}%".format(cur_size / total_size * 100),
         tbar,
         "{} / {}  {}/s".format(
             size_to_human_readable(cur_size),
