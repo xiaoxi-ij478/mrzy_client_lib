@@ -180,9 +180,6 @@ def upload_file(src_filename, rmt_filename, file_type, upload_token):
         )
     }
 
-    multipart_complete_json["parts"].extend(
-    )
-
     multipart_complete_response_json = json.load(
         urllib.request.urlopen(
             urllib.request.Request(
