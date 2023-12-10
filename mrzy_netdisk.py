@@ -284,11 +284,12 @@ def main(argc, argv):
     file_entry = collections.namedtuple("FileEntry", "src_filename rmt_filename file_type")
     command_line = getopt.getopt(
         argv[1:],
-        "u:p:s:f:t:r:",
+        "u:p:s:f:t:r:h",
         [
             "user=", "pass=",
             "passfile=", "file=",
-            "type=", "remote="
+            "type=", "remote=",
+            "help"
         ]
     )
     file_to_upload = []
