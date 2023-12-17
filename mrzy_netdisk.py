@@ -2,6 +2,7 @@
 
 import base64
 import collections
+import datetime
 import getopt
 import hashlib
 import io
@@ -75,7 +76,7 @@ def print_progress(cur_size, total_size, speed):
         pbar = int(27 * (cur_size / total_size))
         tbar = '=' * (pbar - 1) + '>' * bool(pbar)
 
-    res_str = "     {:>6}[{:<27}]{:>35}     ".format(
+    res_str = "   {:>6}  [{:<27}]  {:>35}   ".format(
         "" if not total_size else "{:.1f}%".format(cur_size / total_size * 100),
         tbar,
         "{} / {}  {}/s".format(
@@ -117,6 +118,10 @@ def upload_file(src_filename, rmt_filename, file_type, upload_token):
                 data=b""
             )
         )
+    )
+    print(
+        "Update expires at",
+        datetime.datetime.fromtimestamp(post_upload_begin_json["expireAt"]).ctime()
     )
 
     multipart_upload_uploadid = post_upload_begin_json["uploadId"]
@@ -284,12 +289,11 @@ def main(argc, argv):
     file_entry = collections.namedtuple("FileEntry", "src_filename rmt_filename file_type")
     command_line = getopt.getopt(
         argv[1:],
-        "u:p:s:f:t:r:h",
+        "u:p:s:f:t:r:",
         [
             "user=", "pass=",
             "passfile=", "file=",
-            "type=", "remote=",
-            "help"
+            "type=", "remote="
         ]
     )
     file_to_upload = []
@@ -322,7 +326,7 @@ def main(argc, argv):
 
     if username is None or password is None:
         print("Please specify username and password!")
-        return 0
+        return 1
 
     user_token = login_to_mrzy(username, password)
 
