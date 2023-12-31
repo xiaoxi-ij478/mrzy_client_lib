@@ -12,9 +12,16 @@ import os.path
 import random
 import sys
 import time
+import traceback
 import urllib.request
 
 UPLOAD_SPLIT_CHUNK_SIZE = 6 * 1024 * 1024
+
+class LoginError(Exception):
+    "Error while logging in."
+
+class APIError(Exception):
+    "Error while communicating with API."
 
 def get_upload_sign(json_data):
     return hashlib.md5(
@@ -27,7 +34,7 @@ def get_upload_sign(json_data):
         b"IF75D4U19LKLDAZSMPN5ATQLGBFEJL4VIL2STVDBNJJTO6LNOGB265CR40I4AL13"
     ).hexdigest()
 
-def get_default_upload_filename(src_filename):
+def get_default_upload_filename(src_filename, user_token):
     # (work|file)/(image|audio|video|other)/(student|teacher|other)/....
     return "file/other/student/{}_{}_{}_{}".format(
         int(time.time()),
@@ -37,11 +44,14 @@ def get_default_upload_filename(src_filename):
         os.path.splitext("" if src_filename == 0 else src_filename)[1]
     )
 
-def get_upload_token(rmt_filename, upload_sign, user_token):
+def get_upload_token(rmt_filename, upload_sign, get_token_api, user_token):
+    # 'getQiniuTokenV2' supports only (work|file)/(image|audio|video|other)/(student|teacher|other)/....
+    # 'getQiniuToken' supports arbitrary path
+
     result_json = json.load(
         urllib.request.urlopen(
             urllib.request.Request(
-                "https://lulu.lulufind.com/mrzy/mrzypc/getQiniuTokenV2",
+                "https://lulu.lulufind.com/mrzy/mrzypc/getQiniuToken" + ("V2" if get_token_api == 2 else ""),
                 headers={
                     "token": user_token,
                     "sign": upload_sign
@@ -52,7 +62,7 @@ def get_upload_token(rmt_filename, upload_sign, user_token):
     )
 
     if result_json["code"] != 200:
-        raise Exception("Error while fetching upload token")
+        raise APIError("Error while fetching upload token.")
 
     return result_json["data"][rmt_filename]
 
@@ -76,7 +86,7 @@ def print_progress(cur_size, total_size, speed):
         pbar = int(27 * (cur_size / total_size))
         tbar = '=' * (pbar - 1) + '>' * bool(pbar)
 
-    res_str = "   {:>6}  [{:<27}]  {:>35}   ".format(
+    res_str = "     {:>6}[{:<27}]{:>35}     ".format(
         "" if not total_size else "{:.1f}%".format(cur_size / total_size * 100),
         tbar,
         "{} / {}  {}/s".format(
@@ -100,8 +110,7 @@ def size_to_human_readable(size):
 def upload_file(src_filename, rmt_filename, file_type, upload_token):
     if src_filename != 0:
         if not os.access(src_filename, os.R_OK):
-            print(f"File {src_filename} can't be read!")
-            return ""
+            raise PermissionError(f"File {src_filename} can't be read!")
 
     base64_encoded_rmt_filename = base64.b64encode(rmt_filename.encode()).decode()
     file_type = file_type or mimetypes.guess_type("" if src_filename == 0 else src_filename)[0] or "application/octet-stream"
@@ -231,6 +240,8 @@ def commit_to_mrzy(src_filename, rmt_filename, file_size, user_token):
     return result_json
 
 def login_to_mrzy(username, password):
+    print("Logging in...")
+
     response_json = json.load(
         urllib.request.urlopen(
             urllib.request.Request(
@@ -244,19 +255,21 @@ def login_to_mrzy(username, password):
     )
 
     if response_json["code"] != 200:
-        raise Exception("Error while logging in")
+        raise LoginError("Error while logging in.")
+
+    print("Logged in.")
 
     return response_json["data"]["token"]
 
-def upload_front(src_filename, rmt_filename, file_type, user_token):
+def upload_front(src_filename, rmt_filename, file_type, get_token_api, user_token):
     if rmt_filename is None:
-        rmt_filename = get_default_upload_filename(src_filename)
+        rmt_filename = get_default_upload_filename(src_filename, user_token)
 
     print("Getting upload sign...")
     upload_sign = get_upload_sign({"keys": rmt_filename})
 
     print("Getting upload token...")
-    upload_token = get_upload_token(rmt_filename, upload_sign, user_token)
+    upload_token = get_upload_token(rmt_filename, upload_sign, get_token_api, user_token)
 
     return upload_file(src_filename, rmt_filename, file_type, upload_token)
 
@@ -267,16 +280,21 @@ def print_help(prog_name):
     print("Note: before using this tool, make sure")
     print("you have bound a password account!")
     print()
-    print("  -u, --user     <USERNAME>    Username for login")
-    print("  -p, --pass     <PASSWORD>    Password for login")
-    print("  -s, --passfile <PASSFILE>    File with username and password")
-    print("                 (format: <username> <password>)")
-    print("  -f, --file <FILENAME>        File to upload")
-    print("                 (use '-' to read from stdin)")
-    print("  -t, --type <MIMETYPE>        The type of file, in MIME")
-    print("  -r, --remote <RFILENAME>     Remote file name")
-    print("                 (be careful when using this option,")
-    print("                  you may overwrite other files!)")
+    print("  -u, --user           <USERNAME>   Username for login")
+    print("  -p, --pass           <PASSWORD>   Password for login")
+    print("  -s, --passfile       <PASSFILE>   File with username and password")
+    print("         (format: <username> <password>)")
+    print("  -f, --file           <FILENAME>   File to upload")
+    print("         (use '-' to read from stdin)")
+    print("  -t, --type           <MIMETYPE>   The type of file, in MIME")
+    print("  -r, --remote         <RFILENAME>  Remote file name")
+    print("         (be careful when using this option,")
+    print("          you may overwrite other files!)")
+    print("  -g, --get-token-api  <TYPE>       Get Token API to use (1/2, default 2)")
+    print("         (With Get Token API v1 you can specify arbitrary remote path,")
+    print("          and with Get Token API v2 you need to specify the remote path as follows:")
+    print('          "(work|file)/(image|audio|video|other)/student|teacher|other)/<RFILENAME>")')
+    print("         (BUT PERSONALLY I STRONGLY NOT RECOMMEND TO UPLOAD TO SOMETHING LIKE '/foo'!!!)")
     print("  -h, --help       Display this help")
 
 def main(argc, argv):
@@ -286,14 +304,15 @@ def main(argc, argv):
 
     username, password = None, None
     user_token = None
-    file_entry = collections.namedtuple("FileEntry", "src_filename rmt_filename file_type")
+    file_entry = collections.namedtuple("FileEntry", "src_filename rmt_filename file_type get_token_api")
     command_line = getopt.getopt(
         argv[1:],
-        "u:p:s:f:t:r:",
+        "u:p:s:f:t:r:g:h",
         [
             "user=", "pass=",
             "passfile=", "file=",
-            "type=", "remote="
+            "type=", "remote=",
+            "get-token-api=", "help"
         ]
     )
     file_to_upload = []
@@ -312,13 +331,19 @@ def main(argc, argv):
             if argument == '-':
                 argument = 0
 
-            file_to_upload.append(file_entry(argument, None, None))
+            file_to_upload.append(file_entry(argument, None, None, 2))
 
         elif option in ("-t", "--type"):
             file_to_upload[-1] = file_to_upload[-1]._replace(type=argument)
 
         elif option in ("-r", "--remote"):
             file_to_upload[-1] = file_to_upload[-1]._replace(rmt_filename=argument)
+
+        elif option in ("-g", "--get-token-api"):
+            if argument not in ('1', '2'):
+                raise ValueError("Incorrent API version. Valid: 1, 2.")
+
+            file_to_upload[-1] = file_to_upload[-1]._replace(get_token_api=int(argument))
 
         elif option in ("-h", "--help"):
             print_help(argv[0])
@@ -332,12 +357,17 @@ def main(argc, argv):
 
     for file in file_to_upload:
         print(f"Uploading {'STDIN' if file.src_filename == 0 else file.src_filename}...")
-        result = upload_front(
-            file.src_filename, file.rmt_filename,
-            file.file_type, user_token
-        )
-        print("File uploaded.")
-        print(f"Link: {result}")
+        try:
+            result = upload_front(
+                file.src_filename, file.rmt_filename,
+                file.file_type, file.get_token_api, user_token
+            )
+        except:
+            print(f"Error while uploading file {'STDIN' if file.src_filename == 0 else file.src_filename}.")
+            traceback.print_exc()
+        else:
+            print(f"File {'STDIN' if file.src_filename == 0 else file.src_filename} uploaded.")
+            print(f"Link: {result}")
 
     return 0
 
