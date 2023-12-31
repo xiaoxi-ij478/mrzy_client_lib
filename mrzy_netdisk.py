@@ -15,6 +15,9 @@ import time
 import traceback
 import urllib.request
 
+# note: we can bypass the cache by adding arbitrary query params
+# to the url, like "https://img2.lulufind.com/ff?......."
+
 UPLOAD_SPLIT_CHUNK_SIZE = 6 * 1024 * 1024
 
 class LoginError(Exception):
