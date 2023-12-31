@@ -296,7 +296,7 @@ def print_help(prog_name):
     print("  -g, --get-token-api  <TYPE>       Get Token API to use (1/2, default 2)")
     print("         (With Get Token API v1 you can specify arbitrary remote path,")
     print("          and with Get Token API v2 you need to specify the remote path as follows:")
-    print('          "(work|file)/(image|audio|video|other)/student|teacher|other)/<RFILENAME>")')
+    print('          "(work|file)/(image|audio|video|other)/(student|teacher|other)/<RFILENAME>")')
     print("         (BUT PERSONALLY I STRONGLY NOT RECOMMEND TO UPLOAD TO SOMETHING LIKE '/foo'!!!)")
     print("  -h, --help       Display this help")
 
