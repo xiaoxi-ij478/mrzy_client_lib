@@ -5,6 +5,7 @@ import collections
 import datetime
 import getopt
 import hashlib
+import http.client
 import io
 import json
 import mimetypes
@@ -51,18 +52,21 @@ def get_upload_token(rmt_filename, upload_sign, get_token_api, user_token):
     # 'getQiniuTokenV2' supports only (work|file)/(image|audio|video|other)/(student|teacher|other)/....
     # 'getQiniuToken' supports arbitrary path
 
-    result_json = json.load(
-        urllib.request.urlopen(
-            urllib.request.Request(
-                "https://lulu.lulufind.com/mrzy/mrzypc/getQiniuToken" + ("V2" if get_token_api == 2 else ""),
-                headers={
-                    "token": user_token,
-                    "sign": upload_sign
-                },
-                data=f"keys={rmt_filename}".encode()
+    try:
+        result_json = json.load(
+            urllib.request.urlopen(
+                urllib.request.Request(
+                    "https://lulu.lulufind.com/mrzy/mrzypc/getQiniuToken" + ("V2" if get_token_api == 2 else ""),
+                    headers={
+                        "token": user_token,
+                        "sign": upload_sign
+                    },
+                    data=f"keys={rmt_filename}".encode()
+                )
             )
         )
-    )
+    except http.client.HTTPException as e:
+        raise APIError("Error while fetching upload token.") from e
 
     if result_json["code"] != 200:
         raise APIError("Error while fetching upload token.")
@@ -110,7 +114,10 @@ def size_to_human_readable(size):
 
     return "{:.2f} {}".format(size, suffixes[suffix])
 
-def upload_file(src_filename, rmt_filename, file_type, upload_token):
+def upload_file(
+    src_filename, rmt_filename, file_type,
+    upload_token, add_to_filelist, user_token
+):
     if src_filename != 0:
         if not os.access(src_filename, os.R_OK):
             raise PermissionError(f"File {src_filename} can't be read!")
@@ -214,17 +221,18 @@ def upload_file(src_filename, rmt_filename, file_type, upload_token):
         )
     )
 
-##    print("Commiting to mrzy...")
-##    commit_to_mrzy(src_filename, rmt_filename, file_size, user_token)
+    if add_to_filelist:
+        print("Commiting to mrzy...")
+        commit_to_mrzy(src_filename, "https://img2.lulufind.com/" + rmt_filename, file_size, user_token)
 
     return "https://img2.lulufind.com/" + rmt_filename
 
-def commit_to_mrzy(src_filename, rmt_filename, file_size, user_token):
+def commit_to_mrzy(src_filename, url, file_size, user_token):
     file_info = {
         "name": os.path.basename(src_filename),
         "type": os.path.splitext(src_filename)[1],
         "size": str(file_size),
-        "fileUrl": "https://img2.lulufind.com/" + rmt_filename
+        "fileUrl": url
     }
 
     result_json = json.load(
@@ -245,17 +253,20 @@ def commit_to_mrzy(src_filename, rmt_filename, file_size, user_token):
 def login_to_mrzy(username, password):
     print("Logging in...")
 
-    response_json = json.load(
-        urllib.request.urlopen(
-            urllib.request.Request(
-                "https://api-prod.lulufind.com/api/v1/auth/pwdlogin",
-                headers={"Content-Type": "application/json"},
-                data=json.dumps(
-                    {"login": username, "password": password}
-                ).encode()
+    try:
+        response_json = json.load(
+            urllib.request.urlopen(
+                urllib.request.Request(
+                    "https://api-prod.lulufind.com/api/v1/auth/pwdlogin",
+                    headers={"Content-Type": "application/json"},
+                    data=json.dumps(
+                        {"login": username, "password": password}
+                    ).encode()
+                )
             )
         )
-    )
+    except http.client.HTTPException as e:
+        raise LoginError("Error while logging in.") from e
 
     if response_json["code"] != 200:
         raise LoginError("Error while logging in.")
@@ -264,7 +275,7 @@ def login_to_mrzy(username, password):
 
     return response_json["data"]["token"]
 
-def upload_front(src_filename, rmt_filename, file_type, get_token_api, user_token):
+def upload_front(src_filename, rmt_filename, file_type, get_token_api, add_to_filelist, user_token):
     if rmt_filename is None:
         rmt_filename = get_default_upload_filename(src_filename, user_token)
 
@@ -274,7 +285,7 @@ def upload_front(src_filename, rmt_filename, file_type, get_token_api, user_toke
     print("Getting upload token...")
     upload_token = get_upload_token(rmt_filename, upload_sign, get_token_api, user_token)
 
-    return upload_file(src_filename, rmt_filename, file_type, upload_token)
+    return upload_file(src_filename, rmt_filename, file_type, upload_token, add_to_filelist, user_token)
 
 def print_help(prog_name):
     print(f"Usage: {prog_name} [OPTIONS]..")
@@ -283,21 +294,22 @@ def print_help(prog_name):
     print("Note: before using this tool, make sure")
     print("you have bound a password account!")
     print()
-    print("  -u, --user           <USERNAME>   Username for login")
-    print("  -p, --pass           <PASSWORD>   Password for login")
-    print("  -s, --passfile       <PASSFILE>   File with username and password")
+    print("  -u, --user  <USERNAME>            Username for login")
+    print("  -p, --pass  <PASSWORD>            Password for login")
+    print("  -s, --passfile  <PASSFILE>        File with username and password")
     print("         (format: <username> <password>)")
-    print("  -f, --file           <FILENAME>   File to upload")
+    print("  -f, --file  <FILENAME>            File to upload")
     print("         (use '-' to read from stdin)")
-    print("  -t, --type           <MIMETYPE>   The type of file, in MIME")
-    print("  -r, --remote         <RFILENAME>  Remote file name")
+    print("  -t, --type  <MIMETYPE>            (pre-file) The type of file, in MIME")
+    print("  -r, --remote  <RFILENAME>         (pre-file) Remote file name")
     print("         (be careful when using this option,")
     print("          you may overwrite other files!)")
-    print("  -g, --get-token-api  <TYPE>       Get Token API to use (1/2, default 2)")
+    print("  -g, --get-token-api  <TYPE>       (pre-file) Get Token API to use (1/2, default 2)")
     print("         (With Get Token API v1 you can specify arbitrary remote path,")
     print("          and with Get Token API v2 you need to specify the remote path as follows:")
     print('          "(work|file)/(image|audio|video|other)/(student|teacher|other)/<RFILENAME>")')
     print("         (BUT PERSONALLY I STRONGLY NOT RECOMMEND TO UPLOAD TO SOMETHING LIKE '/foo'!!!)")
+    print("  -a, --add-to-filelist             (pre-file) Add your uploaded file to your file list")
     print("  -h, --help       Display this help")
 
 def main(argc, argv):
@@ -307,15 +319,19 @@ def main(argc, argv):
 
     username, password = None, None
     user_token = None
-    file_entry = collections.namedtuple("FileEntry", "src_filename rmt_filename file_type get_token_api")
+    file_entry = collections.namedtuple(
+        "FileEntry",
+        "src_filename rmt_filename file_type get_token_api add_to_filelist"
+    )
     command_line = getopt.getopt(
         argv[1:],
-        "u:p:s:f:t:r:g:h",
+        "u:p:s:f:t:r:g:ah",
         [
             "user=", "pass=",
             "passfile=", "file=",
             "type=", "remote=",
-            "get-token-api=", "help"
+            "get-token-api=",
+            "add-to-filelist", "help"
         ]
     )
     file_to_upload = []
@@ -334,7 +350,7 @@ def main(argc, argv):
             if argument == '-':
                 argument = 0
 
-            file_to_upload.append(file_entry(argument, None, None, 2))
+            file_to_upload.append(file_entry(argument, None, None, 2, False))
 
         elif option in ("-t", "--type"):
             file_to_upload[-1] = file_to_upload[-1]._replace(type=argument)
@@ -347,6 +363,9 @@ def main(argc, argv):
                 raise ValueError("Incorrent API version. Valid: 1, 2.")
 
             file_to_upload[-1] = file_to_upload[-1]._replace(get_token_api=int(argument))
+
+        elif option in ("-a", "--add-to-filelist"):
+            file_to_upload[-1] = file_to_upload[-1]._replace(add_to_filelist=True)
 
         elif option in ("-h", "--help"):
             print_help(argv[0])
@@ -363,7 +382,8 @@ def main(argc, argv):
         try:
             result = upload_front(
                 file.src_filename, file.rmt_filename,
-                file.file_type, file.get_token_api, user_token
+                file.file_type, file.get_token_api,
+                file.add_to_filelist, user_token
             )
         except:
             print(f"Error while uploading file {'STDIN' if file.src_filename == 0 else file.src_filename}.")
