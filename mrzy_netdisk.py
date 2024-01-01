@@ -315,12 +315,15 @@ def print_help(prog_name):
     print("         (be careful when using this option,")
     print("          you may overwrite other files!)")
     print("  -g, --get-token-api  <TYPE>       (pre-file) Get Token API to use (1/2, default 2)")
-    print("         (With Get Token API v1 you can specify arbitrary remote path,")
-    print("          and with Get Token API v2 you need to specify the remote path as follows:")
-    print('          "(work|file)/(image|audio|video|other)/(student|teacher|other)/<RFILENAME>")')
-    print("         (BUT PERSONALLY I STRONGLY NOT RECOMMEND TO UPLOAD TO SOMETHING LIKE '/foo'!!!)")
     print("  -a, --add-to-filelist             (pre-file) Add your uploaded file to your file list")
     print("  -h, --help       Display this help")
+    print()
+    print("Get Token API description:")
+    print("With Get Token API v1 you can specify arbitrary remote path,")
+    print("  and with Get Token API v2 you need to specify the remote path as follows:")
+    print('  "(work|file)/(image|audio|video|other)/(student|teacher|other)/<RFILENAME>"')
+    print("BUT PERSONALLY I STRONGLY NOT RECOMMEND TO UPLOAD TO SOMETHING LIKE '/foo'!!!")
+    print()
 
 def main(argc, argv):
     if argc == 1:
