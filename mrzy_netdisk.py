@@ -40,6 +40,7 @@ def get_upload_sign(json_data):
 
 def get_default_upload_filename(src_filename, user_token):
     # (work|file)/(image|audio|video|other)/(student|teacher|other)/....
+
     return "file/other/student/{}_{}_{}_{}".format(
         int(time.time()),
         # for privacy
@@ -77,6 +78,10 @@ def get_upload_token(rmt_filename, upload_sign, get_token_api, user_token):
 _roll_pos = 0
 _minus = True
 def print_progress(cur_size, total_size, speed):
+    # if we're not in terminal, don't print
+    if not sys.stdout.isatty():
+        return
+
     global _roll_pos
     global _minus
 
@@ -93,12 +98,13 @@ def print_progress(cur_size, total_size, speed):
         pbar = int(27 * (cur_size / total_size))
         tbar = '=' * (pbar - 1) + '>' * bool(pbar)
 
-    res_str = "     {:>6}[{:<27}]{:>35}     ".format(
-        "" if not total_size else "{:.1f}%".format(cur_size / total_size * 100),
+    # wget-like style
+    # preserve 5 spaces on both sides
+    res_str = "     {:>6}[{:<27}] {:<34}     ".format(
+        "" if not total_size else "%d%%" % (cur_size / total_size * 100),
         tbar,
-        "{} / {}  {}/s".format(
+        "{}  {}/s".format(
             size_to_human_readable(cur_size),
-            size_to_human_readable(total_size),
             size_to_human_readable(speed)
         )
     )
@@ -160,6 +166,10 @@ def upload_file(
 
     begin_time = time.time()
     print("Uploading...")
+    print(
+        "Total length:", file_size,
+        "({})".format(size_to_human_readable(file_size))
+    )
     while size := file.readinto(buffer):
         print_progress(uploaded, file_size, uploaded / (time.time() - begin_time))
         partnum += 1
