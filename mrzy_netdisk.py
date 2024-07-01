@@ -1,22 +1,17 @@
 #!/usr/bin/env python3
 
 import base64
-import collections
 import datetime
 import enum
-import getopt
 import hashlib
 import io
 import json
 import logging
 import mimetypes
 import os.path
-import pprint
 import random
 import sys
-import textwrap
 import time
-import traceback
 import urllib.error
 import urllib.request
 
@@ -63,11 +58,11 @@ class JSONAPIBase:
     Requires `LoggerBase` for logging."""
 
     def _internal_send_request(
-        self,
-        url, header=None, data=None, method=None,
-        what="sending request", verify_json=True,
-        throw_exc=True
+        self, url, header=None, data=None, method=None, what="sending request",
+        verify_json=True, throw_exc=True
     ):
+        # see the class docstring for details
+        # pylint: disable=no-member
         """For internal usage only.
         Send request directly to url.
 
@@ -86,7 +81,7 @@ class JSONAPIBase:
         self.debug("Requesting %s", url)
         self.debug("Headers:")
         for k, v in header.items():
-            self.debug("%s: %s", k, v)
+            self.debug("    %s: %s", k, v)
         if data is not None:
             self.debug("POST data: %s", data)
 
@@ -102,14 +97,17 @@ class JSONAPIBase:
         except Exception as e:
             if throw_exc:
                 raise RequestError("Error while %s." % what) from e
-            else:
-                self.exception("Error while %s.", what)
+            self.exception("Error while %s.", what)
 
         if verify_json:
-            if response_json["code"] != 200:
-                if throw_exc:
-                    raise RequestError("Error while %s. Response JSON: %s." % (what, response_json))
-                else:
+            _empty = object()
+            if response_json.get("code", _empty) is _empty:
+                self.warning('verify_json is True but "code" could not be found')
+                self.warning('assuming success')
+            else:
+                if response_json.get("code", 200) != 200:
+                    if throw_exc:
+                        raise RequestError("Error while %s. Response JSON: %s." % (what, response_json))
                     self.error("Error while %s. Response JSON: %s.", what, response_json)
 
         self.debug("Response JSON: %s", response_json)
@@ -134,10 +132,8 @@ class MrzyAccount(LoggerBase, JSONAPIBase):
         self.account_token = None # account token, set by login()
 
     def _internal_send_request(
-        self,
-        url, header=None, data=None, method=None,
-        sign=True, what="sending request",
-        verify_json=True, throw_exc=True
+        self, url, header=None, data=None, method=None, what="sending request",
+        verify_json=True, throw_exc=True, sign=True
     ):
         """For internal usage only.
         Send request directly to url, optionally check
@@ -168,10 +164,12 @@ class MrzyAccount(LoggerBase, JSONAPIBase):
                 data = "&".join(map("=".join, data.items())).encode()
 
             else:
-                self.warning("verify is True but data is not a dictionary")
+                self.warning("sign is True but data is not a dictionary")
                 self.warning("data: %s", data)
 
-        response_json = super()._internal_send_request(url, header, data, method, what, verify_json, throw_exc)
+        response_json = super()._internal_send_request(
+            url, header, data, method, what, verify_json, throw_exc
+        )
 
         return response_json
 
@@ -212,7 +210,7 @@ class MrzyAccount(LoggerBase, JSONAPIBase):
                 "https://api-prod.lulufind.com/api/v1/auth/pwdlogin",
                 header={"Content-Type": "application/json"},
                 data={"login": self.username, "password": self.password},
-                verify=False, what="logging in"
+                sign=False, what="logging in"
             )
             self._account_dict[self.username] = response_json
             self.account_token = response_json["data"]["token"]
@@ -267,21 +265,22 @@ class QiniuUploader(LoggerBase, JSONAPIBase):
         self.blocks = []
         self.block_num = 1
         self.upload_id = ""
-        self.upload_status = _Status.UNINITIALIZED
+        self.upload_status = self._Status.UNINITIALIZED
+
 
     def __del__(self):
-        if self.upload_status == _Status.UPLOADING:
-            try:
-                self.abort()
-            except:
-                pass
+        try:
+            if self.upload_status == self._Status.UPLOADING:
+                self.abort_upload()
+        except:
+            pass
 
     def _check(self):
         """Sanity check before doing any operation:
         - If this uploader has been done
         - If there's no upload token
         """
-        if self.upload_status == _Status.DONE:
+        if self.upload_status == self._Status.DONE:
             raise UploadError("Trying to operate on a done uploader object.")
 
         if not self.upload_token:
@@ -312,7 +311,7 @@ class QiniuUploader(LoggerBase, JSONAPIBase):
 
         self._check()
 
-        if self.upload_status != _Status.UNINITIALIZED:
+        if self.upload_status != self._Status.UNINITIALIZED:
             raise UploadError("Trying to begin upload after initialized.")
 
         self.info("Initializing upload...")
@@ -324,8 +323,9 @@ class QiniuUploader(LoggerBase, JSONAPIBase):
         )
 
         self.upload_id = response_json["uploadId"]
-        self.upload_status = _Status.UPLOADING
+        self.upload_status = self._Status.UPLOADING
 
+        self.info("Got upload ID.")
         self.debug("Upload ID is %s", self.upload_id)
         self.debug(
             "Update expires at %s",
@@ -340,7 +340,7 @@ class QiniuUploader(LoggerBase, JSONAPIBase):
 
         self._check()
 
-        if self.upload_status != _Status.UPLOADING:
+        if self.upload_status != self._Status.UPLOADING:
             raise UploadError("Trying to abort upload before initialized.")
 
         self.info("Aborting upload...")
@@ -351,12 +351,13 @@ class QiniuUploader(LoggerBase, JSONAPIBase):
                 self.upload_id
             ),
             header={"Authorization": "UpToken " + self.upload_token},
-            method="DELETE", what="initializing upload"
+            method="DELETE", what="aborting upload"
         )
+        self.info("Aborted.")
 
         self.upload_id = ""
         self.block_num = 1
-        self.upload_status = _Status.UNINITIALIZED
+        self.upload_status = self._Status.UNINITIALIZED
 
     def write_block(self, data):
         """Upload data to the server.
@@ -367,7 +368,7 @@ class QiniuUploader(LoggerBase, JSONAPIBase):
 
         self._check()
 
-        if self.upload_status != _Status.UPLOADING:
+        if self.upload_status != self._Status.UPLOADING:
             raise UploadError("Trying to write before initialized.")
 
         response_json = self._internal_send_request(
@@ -384,7 +385,8 @@ class QiniuUploader(LoggerBase, JSONAPIBase):
                 "Content-Length": len(data)
             },
             data=data,
-            method="PUT"
+            method="PUT",
+            what="writing block"
         )
         self.blocks.append(
             {
@@ -404,14 +406,13 @@ class QiniuUploader(LoggerBase, JSONAPIBase):
         self._check()
 
         self.info("Finishing upload...")
-
         self._internal_send_request(
             "https://upload-z2.qiniup.com/"
             "buckets/mrzy/objects/%s/uploads/%s" % (
                 self.base64_enc_rmt_filename,
                 self.upload_id
             ),
-            headers={
+            header={
                 "Content-Type": "application/json",
                 "Authorization": "UpToken " + self.upload_token
             },
@@ -419,13 +420,14 @@ class QiniuUploader(LoggerBase, JSONAPIBase):
                 "fname": self.rmt_filename,
                 "mimeType": self.mime_type,
                 "parts": self.blocks
-            }
+            },
+            what="finishing upload"
         )
+        self.info("Upload finished.")
+        self.upload_status = self._Status.DONE
 
-        self.upload_status = _Status.DONE
 
-
-class MrzyFileUploader(MrzyAccount, QiniuUploader):
+class MrzyFileUploader(LoggerBase):
     "The main Meirizuoye file uploader class."
 
     UPLOAD_SPLIT_CHUNK_SIZE = 2 * 1024 * 1024
@@ -454,27 +456,37 @@ class MrzyFileUploader(MrzyAccount, QiniuUploader):
                                  (default `False`)
         """
 
-        if not isinstance(src_file, (io.RawIOBase, io.BufferedIOBase)) or not src_file.readable():
+        if (not isinstance(src_file, (io.RawIOBase, io.BufferedIOBase)) or
+            not src_file.readable()):
             raise UploadError("source_file must be an file object, and opened for binary reading")
 
-        super(MrzyFileUploader, self).__init__(username, password)
-        super(MrzyAccount, self).__init__(src_file, rmt_filename, mime_type, "")
+        if (not isinstance(output_link_file, io.TextIOBase) or
+            not output_link_file.writable()):
+            self.warning("output_link_file must be an file object, and opened for text writing")
+            self.warning("sys.stdout will be used instead")
+            output_link_file = sys.stdout
 
-        # override some of the variables
         self.src_file = src_file
         self.filesize = filesize
-        self.src_filename = src_filename or self.src_file.name
+        self.src_filename = src_filename or src_file.name
         self.rmt_filename = rmt_filename or self.get_default_upload_filename()
-        self.file_link = "https://img2.lulufind.com/" + self.rmt_filename
-        self.mime_type = mime_type or mimetypes.guess_type(self.src_filename)[0] or "application/octet-stream"
+        self.mime_type = (
+            mime_type or
+            mimetypes.guess_type(self.src_filename or src_file.name)[0] or
+            "application/octet-stream"
+        )
         self.get_token_api = get_token_api
         self.output_link_file = output_link_file
         self.add_to_filelist = add_to_filelist
+        self.file_link = "https://img2.lulufind.com/" + self.rmt_filename
 
-        if not isinstance(self.output_link_file, io.TextIOBase) or not self.output_link_file.writable():
-            self.warning("output_link_file must be an file object, and opened for text writing")
-            self.warning("sys.stdout will be used instead")
-            self.output_link_file = sys.stdout
+        self.mrzy_account_obj = MrzyAccount(username, password)
+        self.qiniu_uploader_obj = QiniuUploader(
+            self.src_file,
+            self.rmt_filename,
+            self.mime_type,
+            ""
+        )
 
     def get_default_upload_filename(self):
         """Get the default upload filename. (For token getter API v2 only)
@@ -505,17 +517,17 @@ class MrzyFileUploader(MrzyAccount, QiniuUploader):
         Sets `self.upload_token`.
         """
 
-        token = self.send_mrzy_request(
-            "https://lulu.lulufind.com/mrzy/mrzypc/getQiniuToken" + ("V2" if self.get_token_api == 2 else ""),
+        token = self.mrzy_account_obj.send_mrzy_request(
+            "https://lulu.lulufind.com/mrzy/mrzypc/getQiniuToken" +
+            ("V2" if self.get_token_api == 2 else ""),
             data={"keys": self.rmt_filename},
             what="getting upload token"
         )["data"][self.rmt_filename]
 
         self.debug("Upload token: %s", token)
-        self.upload_token = token
+        self.qiniu_uploader_obj.upload_token = token
 
-    @staticmethod
-    def _print_progress(cur_size, total_size, speed):
+    def _print_progress(self, cur_size, total_size, speed):
         """For Internal usage only.
         Print upload progress to the terminal.
 
@@ -531,11 +543,11 @@ class MrzyFileUploader(MrzyAccount, QiniuUploader):
             return
 
         print(
-            "%.2f %s/%s %s/s               " % (
+            "%.2f%%     %s/%s     %s/s               " % (
                 0 if not total_size else (cur_size / total_size * 100),
-                self.size_to_human_readable(cur_size),
-                self.size_to_human_readable(total_size),
-                self.size_to_human_readable(speed)
+                self.qiniu_uploader_obj.size_to_human_readable(cur_size),
+                self.qiniu_uploader_obj.size_to_human_readable(total_size),
+                self.qiniu_uploader_obj.size_to_human_readable(speed)
             ),
             end='\r',
             file=sys.stderr
@@ -545,8 +557,8 @@ class MrzyFileUploader(MrzyAccount, QiniuUploader):
         """Begin uploading the file.
         The most important one. :)"""
 
-        self.info("Preparing to uploading file %s", self.src_filename)
-        self.login()
+        self.info('Preparing to uploading file "%s"...', self.src_filename)
+        self.mrzy_account_obj.login()
         self.get_upload_token()
 
         uploaded = 0
@@ -562,11 +574,17 @@ class MrzyFileUploader(MrzyAccount, QiniuUploader):
         begin_time = time.time()
         self.info("Uploading...")
         self.debug("Begin at: %s", begin_time)
-        self.info("Size: %d (%s)", self.filesize, self.size_to_human_readable(self.filesize))
+        self.info(
+            "Size: %d (%s)",
+            self.filesize,
+            self.qiniu_uploader_obj.size_to_human_readable(self.filesize)
+        )
+
+        self.qiniu_uploader_obj.begin_upload()
 
         while buffer := self.src_file.read(self.UPLOAD_SPLIT_CHUNK_SIZE):
             self.debug("Read %d bytes", len(buffer))
-            self.write_block(buffer)
+            self.qiniu_uploader_obj.write_block(buffer)
             uploaded += len(buffer)
             self._print_progress(uploaded, self.filesize, uploaded / (time.time() - begin_time))
 
@@ -578,13 +596,18 @@ class MrzyFileUploader(MrzyAccount, QiniuUploader):
         if self.src_file is not sys.stdin.buffer:
             self.src_file.close()
 
-        self.finish_upload()
+        self.qiniu_uploader_obj.finish_upload()
 
         if self.add_to_filelist:
             self.info("Commiting to Meirizuoye...")
-            commit_to_mrzy(self.filesize or uploaded) # in case it's stdin or pipe, etc.
+            self.commit_to_mrzy(self.filesize or uploaded) # in case it's stdin or pipe, etc.
+            self.info("Commited.")
 
         print(self.file_link, file=self.output_link_file)
+        if self.output_link_file is not sys.stdout:
+            self.output_link_file.close()
+
+        self.info("Uploaded.")
 
     def commit_to_mrzy(self, file_size):
         """Commit file to Meirizuoye.
@@ -599,40 +622,47 @@ class MrzyFileUploader(MrzyAccount, QiniuUploader):
             "fileUrl": self.file_link
         }
 
-        self.send_mrzy_request(
+        self.mrzy_account_obj.send_mrzy_request(
             "https://lulu.lulufind.com/mrzy/mrzypc/addUserFile",
-            file_info, "commiting to Meirizuoye"
+            data=file_info, what="commiting to Meirizuoye"
         )
 
 def print_help(prog_name):
-    print(f"Usage: {prog_name} <file to upload> [options] ...", file=sys.stderr)
-    print("Upload files to Meirizuoye.", file=sys.stderr)
-    print("File may be '-' to read from stdin", file=sys.stderr)
-    print(file=sys.stderr)
-    print("Note: before using this tool, make sure you have bound a password account!", file=sys.stderr)
-    print(file=sys.stderr)
-    print("  -l, --logging <logging_level>       Adjust the logging level (default INFO)", file=sys.stderr)
-    print("      (possible values: DEBUG, INFO, WARNING, ERROR, CRITICAL)", file=sys.stderr)
-    print("  -u, --user  <username>              (pre-file) Username for login", file=sys.stderr)
-    print("  -p, --pass  <password>              (pre-file) Password for login", file=sys.stderr)
-    print("      (for security reasons it is suggested to use the --passfile option below)", file=sys.stderr)
-    print("  -P, --passfile  <password file>     (pre-file) File with username and password", file=sys.stderr)
-    print("      (format: <username> <password>)", file=sys.stderr)
-    print("  -s, --size  <file size>             (pre-file) Specify file size (useful for pipes etc.)", file=sys.stderr)
-    print("  -n, --lfilename  <filename>         (pre-file) Force local filename (useful for pipes etc.)", file=sys.stderr)
-    print("  -t, --mimetype  <mimetype>          (pre-file) The type of file, in MIME", file=sys.stderr)
-    print("  -r, --rfilename  <remote filename>  (pre-file) Remote file name", file=sys.stderr)
-    print("      (be careful when using this option, you may overwrite other files!)", file=sys.stderr)
-    print("  -g, --get-token-api  <version>      (pre-file) Get Token API to use (1/2, default 2)", file=sys.stderr)
-    print("  -o, --output-link  <filename>       (pre-file) Print the file link to the file", file=sys.stderr)
-    print("  -a, --add-to-filelist               (pre-file) Add your uploaded file to your file list", file=sys.stderr)
-    print("  -h, --help       Display this help", file=sys.stderr)
-    print(file=sys.stderr)
-    print("Get Token API description:", file=sys.stderr)
-    print("With Get Token API v1 you can specify arbitrary remote path,", file=sys.stderr)
-    print("  and with Get Token API v2 you need to specify the remote path as follows:", file=sys.stderr)
-    print('  "(work|file)/(image|audio|video|other)/(student|teacher|other)/<RFILENAME>"', file=sys.stderr)
-    print("BUT PERSONALLY I STRONGLY NOT RECOMMEND TO UPLOAD TO SOMETHING LIKE '/foo'!!!", file=sys.stderr)
+    print(
+        """\
+Usage: %s <file to upload> [options] ...
+Upload files to Meirizuoye.
+File may be '-' to read from stdin
+
+Note: before using this tool, make sure you have bound a password account!
+
+  -q, --quiet                         Let the program shut up (set the logging level to CRITICAL)
+      This option will override any other logging level settings
+  -l, --logging <logging_level>       Adjust the logging level (default INFO)
+      (possible values: DEBUG, INFO, WARNING, ERROR, CRITICAL)
+  -u, --user  <username>              (pre-file) Username for login
+  -p, --pass  <password>              (pre-file) Password for login
+      (for security reasons it is suggested to use the --passfile option below)
+  -P, --passfile  <password file>     (pre-file) File with username and password
+      (format: <username> <password>)
+  -s, --size  <file size>             (pre-file) Specify file size (useful for pipes etc.)
+  -n, --lfilename  <filename>         (pre-file) Force local filename (useful for pipes etc.)
+  -t, --mimetype  <mimetype>          (pre-file) The type of file, in MIME
+  -r, --rfilename  <remote filename>  (pre-file) Remote file name
+      (be careful when using this option, you may overwrite other files!)
+  -g, --get-token-api  <version>      (pre-file) Get Token API to use (1/2, default 2)
+  -o, --output-link  <filename>       (pre-file) Print the file link to the file
+  -a, --add-to-filelist               (pre-file) Add your uploaded file to your file list
+  -h, --help       Display this help
+
+Get Token API description:
+With Get Token API v1 you can specify arbitrary remote path,
+  and with Get Token API v2 you need to specify the remote path as follows:
+    "(work|file)/(image|audio|video|other)/(student|teacher|other)/<RFILENAME>"
+BUT PERSONALLY I STRONGLY NOT RECOMMEND TO UPLOAD TO SOMETHING LIKE "/foo"!!!\
+""" % prog_name,
+        file=sys.stderr
+    )
 
 def main(argc, argv):
     if argc == 1:
@@ -640,8 +670,9 @@ def main(argc, argv):
         return 1
 
     file_entry = []
-    iargv = iter(argv)
+    iargv = iter(argv[1:])
     no_more_option = False
+    logging_level = "INFO"
 
     while True:
         try:
@@ -650,13 +681,19 @@ def main(argc, argv):
                 # stop parsing right away
                 break
 
-            if option in ("-l", "--logging"):
-                if (argument := next(iargv).upper()) not in (
-                    "DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"
-                ):
-                    raise CommandLineError("Invalid loggging level. Valid: DEBUG, INFO, WARNING, ERROR, CRITICAL.")
+            if option in ("-q", "--quiet"):
+                logging_level = "!CRITICAL"
 
-                logging_level = argument
+            elif option in ("-l", "--logging"):
+                if logging_level[0] != "!":
+                    if (argument := next(iargv).upper()) not in (
+                        "DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"
+                    ):
+                        raise CommandLineError(
+                            "Invalid loggging level. Valid: DEBUG, INFO, WARNING, ERROR, CRITICAL."
+                        )
+
+                    logging_level = argument
 
             elif option in ("-u", "--user"):
                 file_entry[-1]["username"] = next(iargv)
@@ -665,11 +702,12 @@ def main(argc, argv):
                 file_entry[-1]["password"] = next(iargv)
 
             elif option in ("-P", "--passfile"):
-                file_entry[-1]["username"], file_entry[-1]["password"] = \
-                        open(next(iargv)).readline().strip().split(maxsplit=1)
+                with open(next(iargv), encoding="UTF-8") as f:
+                    file_entry[-1]["username"], file_entry[-1]["password"] = \
+                        f.readline().strip().split(maxsplit=1)
 
             elif option in ("-s", "--size"):
-                file_entry[-1]["username"] = int(next(iargv))
+                file_entry[-1]["filesize"] = int(next(iargv))
 
             elif option in ("-n", "--lfilename"):
                 file_entry[-1]["src_filename"] = next(iargv)
@@ -691,7 +729,7 @@ def main(argc, argv):
                 if (argument := next(iargv)) == '-':
                     argument = sys.stdout
                 else:
-                    argument = open(argument, "x")
+                    argument = open(argument, "x", encoding="UTF-8")
 
                 file_entry[-1]["output_link_file"] = argument
                 del argument
@@ -725,10 +763,24 @@ def main(argc, argv):
             except StopIteration:
                 break
 
-    logging.basicConfig(level=getattr(logging, logging_level))
+    if not file_entry:
+        print_help(argv[0])
+        return 1
+
+    logging.basicConfig(level=getattr(logging, logging_level.strip('!')))
+    _empty = object()
 
     for file in file_entry:
-        MrzyFileUploader(**file).begin_upload()
+        logging.debug("Initializing MrzyFileUploader with the following arguments:")
+        for k, v in file.items():
+            logging.debug('%s="%s"', k, v)
+
+        if file.get("username", _empty) is _empty or file.get("password", _empty) is _empty:
+            logging.error('"%s" has no username or password.', file.get("src_filename", file["src_file"].name))
+            logging.error("This file will be ignored.")
+            continue
+
+        MrzyFileUploader(**file).upload_file()
 
     return 0
 
