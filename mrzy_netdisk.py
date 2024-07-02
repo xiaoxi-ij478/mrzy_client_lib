@@ -325,6 +325,7 @@ class QiniuUploader(LoggerBase, JSONAPIBase):
         self.upload_id = response_json["uploadId"]
         self.upload_status = self._Status.UPLOADING
 
+        self.info("Upload initialized.")
         self.info("Got upload ID.")
         self.debug("Upload ID is %s", self.upload_id)
         self.debug(
@@ -519,12 +520,14 @@ class MrzyFileUploader(LoggerBase):
         Sets `self.qiniu_uploader_obj.upload_token`.
         """
 
+        self.info("Getting upload token...")
         token = self.mrzy_account_obj.send_mrzy_request(
             "https://lulu.lulufind.com/mrzy/mrzypc/getQiniuToken" +
             ("V2" if self.get_token_api == 2 else ""),
             data={"keys": self.rmt_filename},
             what="getting upload token"
         )["data"][self.rmt_filename]
+        self.info("Got upload token.")
 
         self.debug("Upload token: %s", token)
         self.qiniu_uploader_obj.upload_token = token
@@ -601,9 +604,8 @@ class MrzyFileUploader(LoggerBase):
         self.qiniu_uploader_obj.finish_upload()
 
         if self.add_to_filelist:
-            self.info("Commiting to Meirizuoye...")
             self.commit_to_mrzy(self.filesize or uploaded) # in case it's stdin or pipe, etc.
-            self.info("Commited.")
+
 
         print(self.file_link, file=self.output_link_file)
         if self.output_link_file is not sys.stdout:
@@ -617,6 +619,8 @@ class MrzyFileUploader(LoggerBase):
 
             file_size: File's size (0 if unknown, but should not happen)
         """
+
+        self.info("Commiting to Meirizuoye...")
         file_info = {
             "name": os.path.basename(self.src_filename),
             "type": os.path.splitext(self.src_filename)[1],
@@ -628,6 +632,7 @@ class MrzyFileUploader(LoggerBase):
             "https://lulu.lulufind.com/mrzy/mrzypc/addUserFile",
             data=file_info, what="commiting to Meirizuoye"
         )
+        self.info("Commited.")
 
 def print_help(prog_name):
     print(
@@ -728,7 +733,7 @@ def main(argc, argv):
                 del argument
 
             elif option in ("-o", "--output-link"):
-                file_entry[-1]["output_link_file"] = next(iargv)
+                file_entry[-1]["output_link_filepath"] = next(iargv)
 
             elif option in ("-a", "--add-to-filelist"):
                 file_entry[-1]["add_to_filelist"] = True
@@ -741,7 +746,7 @@ def main(argc, argv):
                 raise CommandLineError("option %s not recognized" % option)
 
             else:
-                file_entry.append({"src_file": option})
+                file_entry.append({"src_filepath": option})
 
         except StopIteration:
             no_more_option = True
@@ -751,7 +756,7 @@ def main(argc, argv):
         while True:
             try:
                 filename = next(iargv)
-                file_entry.append({"src_file": filename})
+                file_entry.append({"src_filepath": filename})
             except StopIteration:
                 break
 
