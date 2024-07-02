@@ -430,56 +430,58 @@ class QiniuUploader(LoggerBase, JSONAPIBase):
 class MrzyFileUploader(LoggerBase):
     "The main Meirizuoye file uploader class."
 
-    UPLOAD_SPLIT_CHUNK_SIZE = 2 * 1024 * 1024
+    UPLOAD_SPLIT_CHUNK_SIZE = 3 * 1024 * 1024
 
     def __init__(
-        self, username, password, src_file, filesize=None, src_filename=None,
-        rmt_filename=None, mime_type=None, get_token_api=2,
-        output_link_file=sys.stdout, add_to_filelist=False
+        self, username, password, src_filepath, filesize=None,
+        src_filename=None, rmt_filename=None, mime_type=None, get_token_api=2,
+        output_link_filepath='-', add_to_filelist=False
     ):
         """Create a file uploader instance.
         Arguments:
 
-        username, password:  Passed to `MrzyAccount`
-                  src_file:  Source file object, must opened for binary reading
-                  filesize:  Source file size, overrides `src_file`, default None
-              src_filename:  Source file name, overrides `src_file`, default None
-              rmt_filename:  Forced remote file name,
-                                 if None (default), then calculated automatically
-                 mime_type:  Forced remote file MIME type,
-                                 if None (default), then calculated from the extension
-             get_token_api:  The token getter API version (default 2),
-                                 for differences see the help text
-          output_link_file:  The file object used for writing the result link,
-                                 must opened for text writing (default `sys.stdout`)
-           add_to_filelist:  Add this file to the logged on account's private file list
-                                 (default `False`)
+          username, password:  Passed to `MrzyAccount`
+                src_filepath:  Source file path
+                    filesize:  Source file size, overrides `src_file`, default None
+                src_filename:  Source file name, overrides `src_file`, default None
+                rmt_filename:  Forced remote file name,
+                                   if None (default), then calculated automatically
+                   mime_type:  Forced remote file MIME type,
+                                   if None (default), then calculated from the extension
+               get_token_api:  The token getter API version (default 2),
+                                   for differences see the help text
+        output_link_filepath:  The file path used for writing the result link (default '-')
+             add_to_filelist:  Add this file to the logged on account's private file list
+                               (default `False`)
         """
 
-        if (not isinstance(src_file, (io.RawIOBase, io.BufferedIOBase)) or
-            not src_file.readable()):
-            raise UploadError("source_file must be an file object, and opened for binary reading")
+        try:
+            if src_filepath == '-':
+                self.src_file = sys.stdin.buffer
+            else:
+                self.src_file = open(src_filepath, "rb")
+        except IOError as e:
+            raise UploadError("source file must be readable") from e
 
-        if (not isinstance(output_link_file, io.TextIOBase) or
-            not output_link_file.writable()):
-            self.warning("output_link_file must be an file object, and opened for text writing")
-            self.warning("sys.stdout will be used instead")
-            output_link_file = sys.stdout
+        try:
+            if output_link_filepath == '-':
+                self.output_link_file = sys.stdout
+            else:
+                self.output_link_file = open(output_link_filepath, "w")
+        except IOError as e:
+            raise UploadError("output link file must be writable") from e
 
-        self.src_file = src_file
         self.filesize = filesize
-        self.src_filename = src_filename or src_file.name
+        self.src_filename = src_filename or self.src_file.name
         self.rmt_filename = rmt_filename or self.get_default_upload_filename()
         self.mime_type = (
             mime_type or
-            mimetypes.guess_type(self.src_filename or src_file.name)[0] or
+            mimetypes.guess_type(self.src_filename)[0] or
             "application/octet-stream"
         )
         self.get_token_api = get_token_api
-        self.output_link_file = output_link_file
         self.add_to_filelist = add_to_filelist
         self.file_link = "https://img2.lulufind.com/" + self.rmt_filename
-
         self.mrzy_account_obj = MrzyAccount(username, password)
         self.qiniu_uploader_obj = QiniuUploader(
             self.src_file,
@@ -514,7 +516,7 @@ class MrzyFileUploader(LoggerBase):
 
     def get_upload_token(self):
         """Get the upload token for the remote file.
-        Sets `self.upload_token`.
+        Sets `self.qiniu_uploader_obj.upload_token`.
         """
 
         token = self.mrzy_account_obj.send_mrzy_request(
@@ -726,13 +728,7 @@ def main(argc, argv):
                 del argument
 
             elif option in ("-o", "--output-link"):
-                if (argument := next(iargv)) == '-':
-                    argument = sys.stdout
-                else:
-                    argument = open(argument, "x", encoding="UTF-8")
-
-                file_entry[-1]["output_link_file"] = argument
-                del argument
+                file_entry[-1]["output_link_file"] = next(iargv)
 
             elif option in ("-a", "--add-to-filelist"):
                 file_entry[-1]["add_to_filelist"] = True
@@ -745,9 +741,7 @@ def main(argc, argv):
                 raise CommandLineError("option %s not recognized" % option)
 
             else:
-                file_entry.append(
-                    {"src_file": sys.stdin.buffer if option == '-' else open(option, "rb")}
-                )
+                file_entry.append({"src_file": option})
 
         except StopIteration:
             no_more_option = True
@@ -757,9 +751,7 @@ def main(argc, argv):
         while True:
             try:
                 filename = next(iargv)
-                file_entry.append(
-                    {"src_file": sys.stdin.buffer if filename == '-' else open(filename, "rb")}
-                )
+                file_entry.append({"src_file": filename})
             except StopIteration:
                 break
 
