@@ -606,7 +606,6 @@ class MrzyFileUploader(LoggerBase):
         if self.add_to_filelist:
             self.commit_to_mrzy(self.filesize or uploaded) # in case it's stdin or pipe, etc.
 
-
         print(self.file_link, file=self.output_link_file)
         if self.output_link_file is not sys.stdout:
             self.output_link_file.close()
@@ -773,7 +772,7 @@ def main(argc, argv):
             logging.debug('%s="%s"', k, v)
 
         if file.get("username", _empty) is _empty or file.get("password", _empty) is _empty:
-            logging.error('"%s" has no username or password.', file.get("src_filename", file["src_file"].name))
+            logging.error('"%s" has no username or password.', file.get("src_filename", file["src_filename"].name))
             logging.error("This file will be ignored.")
             continue
 
