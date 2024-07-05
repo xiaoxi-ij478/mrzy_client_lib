@@ -89,25 +89,30 @@ class JSONAPIBase:
             data = json.dumps(data).encode()
 
         try:
-            response_json = json.load(
-                urllib.request.urlopen(
-                    urllib.request.Request(url, headers=header, data=data, method=method)
+            with urllib.request.urlopen(
+                urllib.request.Request(
+                    url, headers=header, data=data, method=method
                 )
-            )
+            ) as uf:
+                response_json = json.load(uf)
         except Exception as e:
             if throw_exc:
-                raise RequestError("Error while %s." % what) from e
+                raise RequestError(f"Error while {what}.") from e
             self.exception("Error while %s.", what)
 
         if verify_json:
             _empty = object()
             if response_json.get("code", _empty) is _empty:
-                self.warning('verify_json is True but "code" could not be found')
-                self.warning('assuming success')
+                # normally there won't be code so we omit the warning
+                pass
+##                self.warning('verify_json is True but "code" could not be found')
+##                self.warning('assuming success')
             else:
                 if response_json.get("code", 200) != 200:
                     if throw_exc:
-                        raise RequestError("Error while %s. Response JSON: %s." % (what, response_json))
+                        raise RequestError(
+                            f"Error while {what}. Response JSON: {response_json}."
+                        )
                     self.error("Error while %s. Response JSON: %s.", what, response_json)
 
         self.debug("Response JSON: %s", response_json)
@@ -155,7 +160,7 @@ class MrzyAccount(LoggerBase, JSONAPIBase):
         if sign:
             if isinstance(data, dict):
                 if self.account_token is None:
-                    self.warning("The user has not logged in while %s." % what)
+                    self.warning("The user has not logged in while %s.", what)
                     self.warning("Now trying to log in.")
                     self.login()
 
@@ -208,9 +213,11 @@ class MrzyAccount(LoggerBase, JSONAPIBase):
             self.debug("Token cache entry not found for user %s", self.username)
             response_json = self._internal_send_request(
                 "https://api-prod.lulufind.com/api/v1/auth/pwdlogin",
+
                 header={"Content-Type": "application/json"},
                 data={"login": self.username, "password": self.password},
-                sign=False, what="logging in"
+                sign=False,
+                what="logging in"
             )
             self._account_dict[self.username] = response_json
             self.account_token = response_json["data"]["token"]
@@ -301,7 +308,7 @@ class QiniuUploader(LoggerBase, JSONAPIBase):
             size /= 1024
             suffix += 1
 
-        return "%.2f%s" % (size, suffixes[suffix])
+        return f"{size:.2f}{suffixes[suffix]}"
 
     def begin_upload(self):
         """Begin the upload.
@@ -317,9 +324,11 @@ class QiniuUploader(LoggerBase, JSONAPIBase):
         self.info("Initializing upload...")
         response_json = self._internal_send_request(
             "https://upload-z2.qiniup.com/"
-            "buckets/mrzy/objects/%s/uploads" % self.base64_enc_rmt_filename,
-            header={"Authorization": "UpToken " + self.upload_token},
-            method="POST", what="initializing upload"
+            f"buckets/mrzy/objects/{self.base64_enc_rmt_filename}/uploads",
+
+            header={"Authorization": f"UpToken {self.upload_token}"},
+            method="POST",
+            what="initializing upload"
         )
 
         self.upload_id = response_json["uploadId"]
@@ -347,12 +356,11 @@ class QiniuUploader(LoggerBase, JSONAPIBase):
         self.info("Aborting upload...")
         self._internal_send_request(
             "https://upload-z2.qiniup.com/"
-            "buckets/mrzy/objects/%s/uploads/%s" % (
-                self.base64_enc_rmt_filename,
-                self.upload_id
-            ),
-            header={"Authorization": "UpToken " + self.upload_token},
-            method="DELETE", what="aborting upload"
+            f"buckets/mrzy/objects/{self.base64_enc_rmt_filename}"
+            f"/uploads/{self.upload_id}",
+            header={"Authorization": f"UpToken {self.upload_token}"},
+            method="DELETE",
+            what="aborting upload"
         )
         self.info("Aborted.")
 
@@ -374,13 +382,10 @@ class QiniuUploader(LoggerBase, JSONAPIBase):
 
         response_json = self._internal_send_request(
             "https://upload-z2.qiniup.com/"
-            "buckets/mrzy/objects/%s/uploads/%s/%s" % (
-                self.base64_enc_rmt_filename,
-                self.upload_id,
-                self.block_num
-            ),
+            f"buckets/mrzy/objects/{self.base64_enc_rmt_filename}"
+            f"/uploads/{self.upload_id}/{self.block_num}",
             header={
-                "Authorization": "UpToken " + self.upload_token,
+                "Authorization": f"UpToken {self.upload_token}",
                 "Content-Type": "application/octet-stream",
                 "Content-MD5": hashlib.md5(data).hexdigest(),
                 "Content-Length": len(data)
@@ -409,13 +414,11 @@ class QiniuUploader(LoggerBase, JSONAPIBase):
         self.info("Finishing upload...")
         self._internal_send_request(
             "https://upload-z2.qiniup.com/"
-            "buckets/mrzy/objects/%s/uploads/%s" % (
-                self.base64_enc_rmt_filename,
-                self.upload_id
-            ),
+            f"buckets/mrzy/objects/{self.base64_enc_rmt_filename}"
+            f"/uploads/{self.upload_id}",
             header={
                 "Content-Type": "application/json",
-                "Authorization": "UpToken " + self.upload_token
+                "Authorization": f"UpToken {self.upload_token}"
             },
             data={
                 "fname": self.rmt_filename,
@@ -468,7 +471,7 @@ class MrzyFileUploader(LoggerBase):
             if output_link_filepath == '-':
                 self.output_link_file = sys.stdout
             else:
-                self.output_link_file = open(output_link_filepath, "w")
+                self.output_link_file = open(output_link_filepath, "w", encoding="locale")
         except IOError as e:
             raise UploadError("output link file must be writable") from e
 
@@ -491,6 +494,13 @@ class MrzyFileUploader(LoggerBase):
             ""
         )
 
+    def __del__(self):
+        try:
+            self.src_file.close()
+            self.output_link_file.close()
+        except:
+            pass
+
     def get_default_upload_filename(self):
         """Get the default upload filename. (For token getter API v2 only)
 
@@ -505,7 +515,7 @@ class MrzyFileUploader(LoggerBase):
                 <file extension>
         """
 
-        filename = "file/other/student/%d_%s_%d_%s" % (
+        filename = "file/other/student/{:d}_{}_{:d}_{}".format(
             int(time.time()),
             "u0000000000000000",
             random.randint(0, 99999999),
@@ -524,6 +534,7 @@ class MrzyFileUploader(LoggerBase):
         token = self.mrzy_account_obj.send_mrzy_request(
             "https://lulu.lulufind.com/mrzy/mrzypc/getQiniuToken" +
             ("V2" if self.get_token_api == 2 else ""),
+
             data={"keys": self.rmt_filename},
             what="getting upload token"
         )["data"][self.rmt_filename]
@@ -548,7 +559,7 @@ class MrzyFileUploader(LoggerBase):
             return
 
         print(
-            "%.2f%%     %s/%s     %s/s               " % (
+            "{:.2f}%     {}/{}     {}/s               ".format(
                 0 if not total_size else (cur_size / total_size * 100),
                 self.qiniu_uploader_obj.size_to_human_readable(cur_size),
                 self.qiniu_uploader_obj.size_to_human_readable(total_size),
@@ -635,13 +646,15 @@ class MrzyFileUploader(LoggerBase):
 
 def print_help(prog_name):
     print(
-        """\
-Usage: %s <file to upload> [options] ...
+        f"""\
+Usage: {prog_name} <file to upload> [options] ...
 Upload files to Meirizuoye.
-File may be '-' to read from stdin
+File may be '-' to read from stdin.
 
 Note: before using this tool, make sure you have bound a password account!
 
+  -d, --disable                       Disable the pre-loaded configuration
+  -C, --config                        Load a config (use - for stdin, see below)
   -q, --quiet                         Let the program shut up (set the logging level to CRITICAL)
       This option will override any other logging level settings
   -l, --logging <logging_level>       Adjust the logging level (default INFO)
@@ -665,99 +678,148 @@ Get Token API description:
 With Get Token API v1 you can specify arbitrary remote path,
   and with Get Token API v2 you need to specify the remote path as follows:
     "(work|file)/(image|audio|video|other)/(student|teacher|other)/<RFILENAME>"
-BUT PERSONALLY I STRONGLY NOT RECOMMEND TO UPLOAD TO SOMETHING LIKE "/foo"!!!\
-""" % prog_name,
+BUT PERSONALLY I STRONGLY NOT RECOMMEND TO UPLOAD TO SOMETHING LIKE "/foo"!!!
+
+Configuration usage:
+Just specify the file name and long options per line
+e.g.:
+    /path/to/upload/file
+    --passfile
+    /path/to/passfile
+    --size
+    50
+    --add-to-filelist
+Recursive configuration file will not be loaded
+A default configuration named ~/.mrzynetdiskrc will be loaded at startup
+(suitable for specifying password file, etc.)\
+""",
         file=sys.stderr
     )
 
 def main(argc, argv):
-    if argc == 1:
-        print_help(argv[0])
-        return 1
+    def parse_command_line(iterable, file_entry_list):
+        nonlocal logging_level
+        nonlocal no_load_def_config
 
-    file_entry = []
-    iargv = iter(argv[1:])
-    no_more_option = False
-    logging_level = "INFO"
+        no_more_option = False
+        iterable = iter(iterable)
 
-    while True:
-        try:
-            option = next(iargv)
-            if option == "--":
-                # stop parsing right away
+        while True:
+            try:
+                option = next(iterable)
+                if option == "--":
+                    # stop parsing right away
+                    break
+
+            except StopIteration:
+                no_more_option = True
                 break
 
-            if option in ("-q", "--quiet"):
+            if option in ("-d", "--disable"):
+                no_load_def_config = True
+
+            elif option in ("-C", "--config"):
+                load_config.append(next(iterable))
+
+            elif option in ("-q", "--quiet"):
                 logging_level = "!CRITICAL"
 
             elif option in ("-l", "--logging"):
                 if logging_level[0] != "!":
-                    if (argument := next(iargv).upper()) not in (
+                    if (argument := next(iterable).upper()) not in (
                         "DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"
                     ):
                         raise CommandLineError(
-                            "Invalid loggging level. Valid: DEBUG, INFO, WARNING, ERROR, CRITICAL."
+                            "Invalid loggging level. "
+                            "Valid: DEBUG, INFO, WARNING, ERROR, CRITICAL."
                         )
 
                     logging_level = argument
 
             elif option in ("-u", "--user"):
-                file_entry[-1]["username"] = next(iargv)
+                file_entry_list[-1]["username"] = next(iterable)
 
             elif option in ("-p", "--pass"):
-                file_entry[-1]["password"] = next(iargv)
+                file_entry_list[-1]["password"] = next(iterable)
 
             elif option in ("-P", "--passfile"):
-                with open(next(iargv), encoding="UTF-8") as f:
-                    file_entry[-1]["username"], file_entry[-1]["password"] = \
-                        f.readline().strip().split(maxsplit=1)
+                with open(next(iterable), encoding="locale") as f:
+                    (
+                        file_entry_list[-1]["username"],
+                         file_entry_list[-1]["password"]
+                    ) = f.readline().strip().split(maxsplit=1)
 
             elif option in ("-s", "--size"):
-                file_entry[-1]["filesize"] = int(next(iargv))
+                file_entry_list[-1]["filesize"] = int(next(iterable))
 
             elif option in ("-n", "--lfilename"):
-                file_entry[-1]["src_filename"] = next(iargv)
+                file_entry_list[-1]["src_filename"] = next(iterable)
 
             elif option in ("-t", "--type"):
-                file_entry[-1]["mime_type"] = next(iargv)
+                file_entry_list[-1]["mime_type"] = next(iterable)
 
             elif option in ("-r", "--rfilename"):
-                file_entry[-1]["rmt_filename"] = next(iargv)
+                file_entry_list[-1]["rmt_filename"] = next(iterable)
 
             elif option in ("-g", "--get-token-api"):
-                if (argument := next(iargv)) not in ('1', '2'):
+                if (argument := next(iterable)) not in ('1', '2'):
                     raise ValueError("Invalid API version. Valid: 1, 2.")
 
-                file_entry[-1]["get_token_api"] = int(argument)
+                file_entry_list[-1]["get_token_api"] = int(argument)
                 del argument
 
             elif option in ("-o", "--output-link"):
-                file_entry[-1]["output_link_filepath"] = next(iargv)
+                file_entry_list[-1]["output_link_filepath"] = next(iterable)
 
             elif option in ("-a", "--add-to-filelist"):
-                file_entry[-1]["add_to_filelist"] = True
+                file_entry_list[-1]["add_to_filelist"] = True
 
             elif option in ("-h", "--help"):
                 print_help(argv[0])
-                return 0
+                sys.exit(0)
 
             elif len(option) > 1 and option[0] == '-':
-                raise CommandLineError("option %s not recognized" % option)
+                raise CommandLineError(f"option {option} not recognized")
 
             else:
-                file_entry.append({"src_filepath": option})
+                file_entry_list.append({"src_filepath": option})
 
-        except StopIteration:
-            no_more_option = True
-            break
+        if not no_more_option:
+            while True:
+                try:
+                    filename = next(iterable)
+                    file_entry_list.append({"src_filepath": filename})
+                except StopIteration:
+                    break
 
-    if not no_more_option:
-        while True:
-            try:
-                filename = next(iargv)
-                file_entry.append({"src_filepath": filename})
-            except StopIteration:
-                break
+    if argc == 1:
+        print_help(argv[0])
+        return 1
+
+    file_entry = []
+    no_load_def_config = False
+    def_config = {}
+    load_config = []
+    logging_level = "INFO"
+
+    parse_command_line(argv[1:], file_entry)
+    for i in load_config:
+        with open(i, encoding="locale") as f:
+            parse_command_line(map(lambda l: l.strip(), f), file_entry)
+
+    if not no_load_def_config:
+        with open(
+            os.path.expanduser("~/.mrzynetdiskrc"),
+            encoding="locale"
+        ) as f:
+            parse_command_line(map(lambda l: l.strip(), f), [def_config])
+
+        # strip out filename from def config
+        def_config.pop("src_filepath", None)
+
+        for fo in file_entry:
+            for k, v in def_config.items():
+                fo.setdefault(k, v)
 
     if not file_entry:
         print_help(argv[0])
@@ -772,7 +834,10 @@ def main(argc, argv):
             logging.debug('%s="%s"', k, v)
 
         if file.get("username", _empty) is _empty or file.get("password", _empty) is _empty:
-            logging.error('"%s" has no username or password.', file.get("src_filename", file["src_filename"].name))
+            logging.error(
+                '"%s" has no username or password.',
+                file.get("src_filename", file["src_filepath"])
+            )
             logging.error("This file will be ignored.")
             continue
 
