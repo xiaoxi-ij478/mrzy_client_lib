@@ -508,7 +508,7 @@ class MrzyFileUploader(LoggerBase):
             (work|file)/(image|audio|video|other)/(student|teacher|other)/<real_filename>
 
             Where <real_filename> is:
-                <unix timestamp> + "_" +
+                <unix timestamp (in nanoseconds (we use) / microseconds)> + "_" +
                 <user's open ID (but we use 0 for privacy)> + "_" +
                 <random number> + "_" +
                 (only for video, but we don't use) "_duration=" + <video's duration> +
@@ -516,7 +516,7 @@ class MrzyFileUploader(LoggerBase):
         """
 
         filename = "file/other/student/{:d}_{}_{:d}_{}".format(
-            int(time.time()),
+            time.time_ns(),
             "u0000000000000000",
             random.randint(0, 99999999),
             os.path.splitext(self.src_filename)[1]
