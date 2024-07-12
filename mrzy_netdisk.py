@@ -18,6 +18,14 @@ import urllib.request
 # note: we can bypass the cache by adding arbitrary query params
 # to the url, like "https://img2.lulufind.com/ff?......."
 
+# a global variable to tell the program to
+# suppress the warning to upload to root directory
+no_upload_to_root_dir_warning = False
+
+# a global variable to tell the program to
+# suppress the warning to upload to existing files
+no_upload_to_existing_file_warning = False
+
 class BaseError(Exception):
     "The base class for all the errors"
 
@@ -26,6 +34,12 @@ class RequestError(BaseError):
 
 class UploadError(BaseError):
     "Error while uploading."
+
+class NoUploadToRootDirectoryError(UploadError):
+    "Error when trying to upload to root directory."
+
+class NoUploadToExistingFileError(UploadError):
+    "Error when trying to upload to existing files."
 
 class CommandLineError(BaseError):
     "Error while parsing command line."
@@ -486,6 +500,28 @@ class MrzyFileUploader(LoggerBase):
         self.get_token_api = get_token_api
         self.add_to_filelist = add_to_filelist
         self.file_link = "https://img2.lulufind.com/" + self.rmt_filename
+        try:
+            urllib.request.urlopen(self.file_link)
+        except urllib.error.HTTPError as e:
+            pass
+        else:
+            if no_upload_to_existing_file_warning:
+                self.warning("You are trying to upload to an existing file!!!!!!! THIS IS VERY DANGEROUS!!!!!!!")
+                self.warning("If this is not what you want, STOP RIGHT NOW!!!!!!!!!!!!")
+            else:
+                raise NoUploadToExistingFileError(
+                    "Uploading to an existing file is VERY DANGEROUS!!!!!! PLEASE THINK TWICE BEFORE YOU DO!!!!!!!!\n"
+                    "If you really want to do so, please specify '--yes-i-want-to-upload-to-existing-files'\n"
+                    "in the command line (I'll be not responsible for any disasters you make)."
+                )
+
+        if not os.path.dirname(self.rmt_filename) and not no_upload_to_root_dir_warning:
+            raise NoUploadToRootDirectoryError(
+                "Uploading to root directory is VERY DANGEROUS!!!!!! PLEASE THINK TWICE BEFORE YOU DO!!!!!!!!\n"
+                "If you really want to do so, please specify '--yes-i-want-to-upload-to-root-directory'\n"
+                "in the command line (I'll be not responsible for any disasters you make)."
+            )
+
         self.mrzy_account_obj = MrzyAccount(username, password)
         self.qiniu_uploader_obj = QiniuUploader(
             self.src_file,
@@ -678,7 +714,7 @@ Get Token API description:
 With Get Token API v1 you can specify arbitrary remote path,
   and with Get Token API v2 you need to specify the remote path as follows:
     "(work|file)/(image|audio|video|other)/(student|teacher|other)/<RFILENAME>"
-BUT PERSONALLY I STRONGLY NOT RECOMMEND TO UPLOAD TO SOMETHING LIKE "/foo"!!!
+(When using v1 API, DON'T TRY TO UPLOAD FILES TO '/'!!!!!!!!!!!!!!!!)
 
 Configuration usage:
 Just specify the file name and long options per line
@@ -700,6 +736,8 @@ def main(argc, argv):
     def parse_command_line(iterable, file_entry_list):
         nonlocal logging_level
         nonlocal no_load_def_config
+        global no_upload_to_root_dir_warning
+        global no_upload_to_existing_file_warning
 
         no_more_option = False
         iterable = iter(iterable)
@@ -777,6 +815,12 @@ def main(argc, argv):
             elif option in ("-h", "--help"):
                 print_help(argv[0])
                 sys.exit(0)
+
+            elif option == "--yes-i-want-to-upload-to-root-directory":
+                no_upload_to_root_dir_warning = True
+
+            elif option == "--yes-i-want-to-upload-to-existing-files":
+                no_upload_to_existing_file_warning = True
 
             elif len(option) > 1 and option[0] == '-':
                 raise CommandLineError(f"option {option} not recognized")
