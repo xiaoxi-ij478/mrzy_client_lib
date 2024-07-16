@@ -699,7 +699,7 @@ Note: before using this tool, make sure you have bound a password account!
   -p, --pass  <password>              (pre-file) Password for login
       (for security reasons it is suggested to use the --passfile option below)
   -P, --passfile  <password file>     (pre-file) File with username and password
-      (format: <username> <password>)
+      (format: <username> <line feed> <password>)
   -s, --size  <file size>             (pre-file) Specify file size (useful for pipes etc.)
   -n, --lfilename  <filename>         (pre-file) Force local filename (useful for pipes etc.)
   -t, --mimetype  <mimetype>          (pre-file) The type of file, in MIME
@@ -784,8 +784,8 @@ def main(argc, argv):
                 with open(next(iterable), encoding="locale") as f:
                     (
                         file_entry_list[-1]["username"],
-                         file_entry_list[-1]["password"]
-                    ) = f.readline().strip().split(maxsplit=1)
+                        file_entry_list[-1]["password"]
+                    ) = map(lambda a: a.strip(), iter(f))
 
             elif option in ("-s", "--size"):
                 file_entry_list[-1]["filesize"] = int(next(iterable))
