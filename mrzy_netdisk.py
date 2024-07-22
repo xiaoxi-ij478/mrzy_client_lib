@@ -488,6 +488,9 @@ class MrzyFileUploader(LoggerBase):
                 self.output_link_file = open(output_link_filepath, "w", encoding="locale")
         except IOError as e:
             raise UploadError("output link file must be writable") from e
+            
+        if get_token_api not in (1, 2):
+            raise ValueError("Invalid API version. Valid versions are 1 or 2.")
 
         self.filesize = filesize
         self.src_filename = src_filename or self.src_file.name
@@ -515,12 +518,21 @@ class MrzyFileUploader(LoggerBase):
                     "in the command line (I'll be not responsible for any disasters you make)."
                 )
 
-        if not os.path.dirname(self.rmt_filename) and not no_upload_to_root_dir_warning:
-            raise NoUploadToRootDirectoryError(
+        if not os.path.dirname(self.rmt_filename):
+            if no_upload_to_root_dir_warning:
+                self.warning("You are trying to upload to root directory!!!!!!! THIS IS VERY DANGEROUS!!!!!!!")
+                self.warning("If this is not what you want, STOP RIGHT NOW!!!!!!!!!!!!")
+            else:
+                raise NoUploadToRootDirectoryError(
                 "Uploading to root directory is VERY DANGEROUS!!!!!! PLEASE THINK TWICE BEFORE YOU DO!!!!!!!!\n"
                 "If you really want to do so, please specify '--yes-i-want-to-upload-to-root-directory'\n"
                 "in the command line (I'll be not responsible for any disasters you make)."
             )
+
+        if get_token_api == 1:
+            self.warning("Use of Get Token API v1 is discouraged.")
+            self.warning("It might cause serious troubles you can't handle.")
+            self.warning("To be safe, just use v2 API.")
 
         self.mrzy_account_obj = MrzyAccount(username, password)
         self.qiniu_uploader_obj = QiniuUploader(
@@ -800,11 +812,7 @@ def main(argc, argv):
                 file_entry_list[-1]["rmt_filename"] = next(iterable)
 
             elif option in ("-g", "--get-token-api"):
-                if (argument := next(iterable)) not in ('1', '2'):
-                    raise ValueError("Invalid API version. Valid: 1, 2.")
-
-                file_entry_list[-1]["get_token_api"] = int(argument)
-                del argument
+                file_entry_list[-1]["get_token_api"] = int(next(iterable))
 
             elif option in ("-o", "--output-link"):
                 file_entry_list[-1]["output_link_filepath"] = next(iterable)
