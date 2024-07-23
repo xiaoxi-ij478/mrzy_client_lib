@@ -307,23 +307,6 @@ class QiniuUploader(LoggerBase, JSONAPIBase):
         if not self.upload_token:
             raise UploadError("Upload token has not been set.")
 
-    @staticmethod
-    def size_to_human_readable(size):
-        """Convert a size to human readable size.
-
-        Arguments:
-            size: Size
-        """
-
-        suffixes = ['B', "KiB", "MiB", "GiB", "TiB", "EiB", "ZiB", "YiB"]
-        suffix = 0 # suffixes index
-
-        while size >= 1024 and suffix <= 7:
-            size /= 1024
-            suffix += 1
-
-        return f"{size:.2f}{suffixes[suffix]}"
-
     def begin_upload(self):
         """Begin the upload.
         This method gets the upload ID for uploading.
@@ -453,7 +436,8 @@ class MrzyFileUploader(LoggerBase):
     def __init__(
         self, username, password, src_filepath, filesize=None,
         src_filename=None, rmt_filename=None, mime_type=None, get_token_api=2,
-        output_link_filepath='-', add_to_filelist=False
+        output_link_filepath='-', add_to_filelist=False,
+        dry_run=False
     ):
         """Create a file uploader instance.
         Arguments:
@@ -470,7 +454,8 @@ class MrzyFileUploader(LoggerBase):
                                    for differences see the help text
         output_link_filepath:  The file path used for writing the result link (default '-')
              add_to_filelist:  Add this file to the logged on account's private file list
-                               (default `False`)
+                               (default False)
+                     dry_run:  Do not actually upload the file (default False)
         """
 
         try:
@@ -503,6 +488,7 @@ class MrzyFileUploader(LoggerBase):
         self.get_token_api = get_token_api
         self.add_to_filelist = add_to_filelist
         self.file_link = "https://img2.lulufind.com/" + self.rmt_filename
+        self.dry_run = dry_run
         try:
             urllib.request.urlopen(self.file_link)
         except urllib.error.HTTPError as e:
@@ -548,6 +534,23 @@ class MrzyFileUploader(LoggerBase):
             self.output_link_file.close()
         except:
             pass
+
+    @staticmethod
+    def size_to_human_readable(size):
+        """Convert a size to human readable size.
+
+        Arguments:
+            size: Size
+        """
+
+        suffixes = ['B', "KiB", "MiB", "GiB", "TiB", "EiB", "ZiB", "YiB"]
+        suffix = 0 # suffixes index
+
+        while size >= 1024 and suffix <= 7:
+            size /= 1024
+            suffix += 1
+
+        return f"{size:.2f}{suffixes[suffix]}"
 
     def get_default_upload_filename(self):
         """Get the default upload filename. (For token getter API v2 only)
@@ -609,9 +612,9 @@ class MrzyFileUploader(LoggerBase):
         print(
             "{:.2f}%     {}/{}     {}/s               ".format(
                 0 if not total_size else (cur_size / total_size * 100),
-                self.qiniu_uploader_obj.size_to_human_readable(cur_size),
-                self.qiniu_uploader_obj.size_to_human_readable(total_size),
-                self.qiniu_uploader_obj.size_to_human_readable(speed)
+                self.size_to_human_readable(cur_size),
+                self.size_to_human_readable(total_size),
+                self.size_to_human_readable(speed)
             ),
             end='\r',
             file=sys.stderr
@@ -637,34 +640,36 @@ class MrzyFileUploader(LoggerBase):
 
         begin_time = time.time()
         self.info("Uploading...")
-        self.debug("Begin at: %s", begin_time)
+        self.debug("Begin at %s", datetime.datetime.fromtimestamp(begin_time).ctime())
         self.info(
             "Size: %d (%s)",
             self.filesize,
-            self.qiniu_uploader_obj.size_to_human_readable(self.filesize)
+            self.size_to_human_readable(self.filesize)
         )
 
-        self.qiniu_uploader_obj.begin_upload()
-
-        while buffer := self.src_file.read(self.UPLOAD_SPLIT_CHUNK_SIZE):
-            self.debug("Read %d bytes", len(buffer))
-            self.qiniu_uploader_obj.write_block(buffer)
-            uploaded += len(buffer)
+        if not self.dry_run:
+            self.qiniu_uploader_obj.begin_upload()
+    
+            while buffer := self.src_file.read(self.UPLOAD_SPLIT_CHUNK_SIZE):
+                self.debug("Read %d bytes", len(buffer))
+                self.qiniu_uploader_obj.write_block(buffer)
+                uploaded += len(buffer)
+                self._print_progress(uploaded, self.filesize, uploaded / (time.time() - begin_time))
+    
             self._print_progress(uploaded, self.filesize, uploaded / (time.time() - begin_time))
+            if sys.stderr.isatty() and logging.getLogger().level <= logging.INFO:
+                print(file=sys.stderr)
+    
+            # do not close stdin
+            if self.src_file is not sys.stdin.buffer:
+                self.src_file.close()
+    
+            self.qiniu_uploader_obj.finish_upload()
+    
+            if self.add_to_filelist:
+                self.commit_to_mrzy(self.filesize or uploaded) # in case it's stdin or pipe, etc.
 
-        self._print_progress(uploaded, self.filesize, uploaded / (time.time() - begin_time))
-        if sys.stderr.isatty() and logging.getLogger().level <= logging.INFO:
-            print(file=sys.stderr)
-
-        # do not close stdin
-        if self.src_file is not sys.stdin.buffer:
-            self.src_file.close()
-
-        self.qiniu_uploader_obj.finish_upload()
-
-        if self.add_to_filelist:
-            self.commit_to_mrzy(self.filesize or uploaded) # in case it's stdin or pipe, etc.
-
+        self.debug("End at %s", datetime.datetime.now().ctime())
         print(self.file_link, file=self.output_link_file)
         if self.output_link_file is not sys.stdout:
             self.output_link_file.close()
@@ -720,6 +725,7 @@ Note: before using this tool, make sure you have bound a password account!
   -g, --get-token-api  <version>      (pre-file) Get Token API to use (1/2, default 2)
   -o, --output-link  <filename>       (pre-file) Print the file link to the file
   -a, --add-to-filelist               (pre-file) Add your uploaded file to your file list
+  -y, --dry-run                       (pre-file) Do not actually upload the file (only login and get token)
   -h, --help       Display this help
 
 Get Token API description:
@@ -820,6 +826,9 @@ def main(argc, argv):
             elif option in ("-a", "--add-to-filelist"):
                 file_entry_list[-1]["add_to_filelist"] = True
 
+            elif option in ("-y", "--dry-run"):
+                file_entry_list[-1]["dry_run"] = True
+
             elif option in ("-h", "--help"):
                 print_help(argv[0])
                 sys.exit(0)
@@ -860,18 +869,21 @@ def main(argc, argv):
             parse_command_line(map(lambda l: l.strip(), f), file_entry)
 
     if not no_load_def_config:
-        with open(
-            os.path.expanduser("~/.mrzynetdiskrc"),
-            encoding="locale"
-        ) as f:
-            parse_command_line(map(lambda l: l.strip(), f), [def_config])
-
-        # strip out filename from def config
-        def_config.pop("src_filepath", None)
-
-        for fo in file_entry:
-            for k, v in def_config.items():
-                fo.setdefault(k, v)
+        try:
+            with open(
+                os.path.expanduser("~/.mrzynetdiskrc"),
+                encoding="locale"
+            ) as f:
+                parse_command_line(map(lambda l: l.strip(), f), [def_config])
+        except FileNotFoundError:
+            pass
+        else:
+            # strip out filename from def config
+            def_config.pop("src_filepath", None)
+    
+            for fo in file_entry:
+                for k, v in def_config.items():
+                    fo.setdefault(k, v)
 
     if not file_entry:
         print_help(argv[0])
