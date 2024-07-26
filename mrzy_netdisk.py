@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import atexit
 import base64
 import datetime
 import enum
@@ -11,6 +12,7 @@ import mimetypes
 import os.path
 import random
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -25,6 +27,13 @@ no_upload_to_root_dir_warning = False
 # a global variable to tell the program to
 # suppress the warning to upload to existing files
 no_upload_to_existing_file_warning = False
+
+# performance hack
+# a flag indicating whether to check for existing files
+# useful if you are sure there will be no collision
+# as checking requiring connecting server many times
+# there's no way to change this from command line, to prevent from abuse
+no_check_existing_files = True
 
 class BaseError(Exception):
     "The base class for all the errors"
@@ -149,6 +158,7 @@ class MrzyAccount(LoggerBase, JSONAPIBase):
         self.username = username
         self.password = password
         self.account_token = None # account token, set by login()
+        self.openid = None
 
     def _internal_send_request(
         self, url, header=None, data=None, method=None, what="sending request",
@@ -180,7 +190,7 @@ class MrzyAccount(LoggerBase, JSONAPIBase):
 
                 header["token"] = self.account_token
                 header["sign"] = self.get_json_sign(data)
-                data = "&".join(map("=".join, data.items())).encode()
+                data = "&".join(f"{k}={v}" for k, v in data.items()).encode()
 
             else:
                 self.warning("sign is True but data is not a dictionary")
@@ -215,14 +225,12 @@ class MrzyAccount(LoggerBase, JSONAPIBase):
         This method sets `self.account_token`.
         """
 
-        if self.account_token is not None:
-            self.warning("Trying to logging twice!")
-
         self.info("Logging in...")
 
         if self._account_dict.get(self.username):
             self.debug("Token cache entry found for user %s", self.username)
             self.account_token = self._account_dict[self.username]["data"]["token"]
+            self.openid = self._account_dict[self.username]["data"]["openId"]
         else:
             self.debug("Token cache entry not found for user %s", self.username)
             response_json = self._internal_send_request(
@@ -235,6 +243,7 @@ class MrzyAccount(LoggerBase, JSONAPIBase):
             )
             self._account_dict[self.username] = response_json
             self.account_token = response_json["data"]["token"]
+            self.openid = response_json["data"]["openId"]
 
         self.info("Logged in.")
 
@@ -259,8 +268,6 @@ class QiniuUploader(LoggerBase, JSONAPIBase):
     The regular SDK could not be used because we don't have
     accesskey / secretkey (and I don't want to use it either)
     """
-
-    # emulate a file-like interface
 
     class _Status(enum.IntEnum):
         UNINITIALIZED = 0
@@ -287,9 +294,13 @@ class QiniuUploader(LoggerBase, JSONAPIBase):
         self.block_num = 1
         self.upload_id = ""
         self.upload_status = self._Status.UNINITIALIZED
-
+        atexit.register(self._force_close)
 
     def __del__(self):
+        self._force_close()
+        atexit.unregister(self._force_close)
+    
+    def _force_close(self):
         try:
             if self.upload_status == self._Status.UPLOADING:
                 self.abort_upload()
@@ -437,7 +448,7 @@ class MrzyFileUploader(LoggerBase):
         self, username, password, src_filepath, filesize=None,
         src_filename=None, rmt_filename=None, mime_type=None, get_token_api=2,
         output_link_filepath='-', add_to_filelist=False,
-        dry_run=False
+        dry_run=False, upload_token=''
     ):
         """Create a file uploader instance.
         Arguments:
@@ -456,6 +467,7 @@ class MrzyFileUploader(LoggerBase):
              add_to_filelist:  Add this file to the logged on account's private file list
                                (default False)
                      dry_run:  Do not actually upload the file (default False)
+                upload_token:  If the file's upload token is known, put it here
         """
 
         try:
@@ -477,6 +489,8 @@ class MrzyFileUploader(LoggerBase):
         if get_token_api not in (1, 2):
             raise ValueError("Invalid API version. Valid versions are 1 or 2.")
 
+        self.mrzy_account_obj = MrzyAccount(username, password)
+        self.mrzy_account_obj.login()
         self.filesize = filesize
         self.src_filename = src_filename or self.src_file.name
         self.rmt_filename = rmt_filename or self.get_default_upload_filename()
@@ -489,20 +503,23 @@ class MrzyFileUploader(LoggerBase):
         self.add_to_filelist = add_to_filelist
         self.file_link = "https://img2.lulufind.com/" + self.rmt_filename
         self.dry_run = dry_run
-        try:
-            urllib.request.urlopen(self.file_link)
-        except urllib.error.HTTPError as e:
-            pass
-        else:
-            if no_upload_to_existing_file_warning:
-                self.warning("You are trying to upload to an existing file!!!!!!! THIS IS VERY DANGEROUS!!!!!!!")
-                self.warning("If this is not what you want, STOP RIGHT NOW!!!!!!!!!!!!")
+        if not no_check_existing_files:
+            try:
+                urllib.request.urlopen(self.file_link)
+            except urllib.error.HTTPError as e:
+                if e.code != 404:
+                    # this should not happen
+                    self.warning("access url %s returned error %d; this should be debugged", self.file_link, e.code)
             else:
-                raise NoUploadToExistingFileError(
-                    "Uploading to an existing file is VERY DANGEROUS!!!!!! PLEASE THINK TWICE BEFORE YOU DO!!!!!!!!\n"
-                    "If you really want to do so, please specify '--yes-i-want-to-upload-to-existing-files'\n"
-                    "in the command line (I'll be not responsible for any disasters you make)."
-                )
+                if no_upload_to_existing_file_warning:
+                    self.warning("You are trying to upload to an existing file!!!!!!! THIS IS VERY DANGEROUS!!!!!!!")
+                    self.warning("If this is not what you want, STOP RIGHT NOW!!!!!!!!!!!!")
+                else:
+                    raise NoUploadToExistingFileError(
+                        "Uploading to an existing file is VERY DANGEROUS!!!!!! PLEASE THINK TWICE BEFORE YOU DO!!!!!!!!\n"
+                        "If you really want to do so, please specify '--yes-i-want-to-upload-to-existing-files'\n"
+                        "on the command line (I'll be not responsible for any disasters you make)."
+                    )
 
         if not os.path.dirname(self.rmt_filename):
             if no_upload_to_root_dir_warning:
@@ -512,7 +529,7 @@ class MrzyFileUploader(LoggerBase):
                 raise NoUploadToRootDirectoryError(
                 "Uploading to root directory is VERY DANGEROUS!!!!!! PLEASE THINK TWICE BEFORE YOU DO!!!!!!!!\n"
                 "If you really want to do so, please specify '--yes-i-want-to-upload-to-root-directory'\n"
-                "in the command line (I'll be not responsible for any disasters you make)."
+                "on the command line (I'll be not responsible for any disasters you make)."
             )
 
         if get_token_api == 1:
@@ -520,15 +537,20 @@ class MrzyFileUploader(LoggerBase):
             self.warning("It might cause serious troubles you can't handle.")
             self.warning("To be safe, just use v2 API.")
 
-        self.mrzy_account_obj = MrzyAccount(username, password)
         self.qiniu_uploader_obj = QiniuUploader(
             self.src_file,
             self.rmt_filename,
             self.mime_type,
-            ""
+            upload_token
         )
 
+        atexit.register(self._force_close)
+
     def __del__(self):
+        self._force_close()
+        atexit.unregister(self._force_close)
+
+    def _force_close(self):
         try:
             self.src_file.close()
             self.output_link_file.close()
@@ -582,13 +604,18 @@ class MrzyFileUploader(LoggerBase):
         """
 
         self.info("Getting upload token...")
-        token = self.mrzy_account_obj.send_mrzy_request(
-            "https://lulu.lulufind.com/mrzy/mrzypc/getQiniuToken" +
-            ("V2" if self.get_token_api == 2 else ""),
 
-            data={"keys": self.rmt_filename},
-            what="getting upload token"
-        )["data"][self.rmt_filename]
+        if self.qiniu_uploader_obj.upload_token:
+            token = self.qiniu_uploader_obj.upload_token
+        else:
+            token = self.mrzy_account_obj.send_mrzy_request(
+                "https://lulu.lulufind.com/mrzy/mrzypc/getQiniuToken" +
+                ("V2" if self.get_token_api == 2 else ""),
+    
+                data={"keys": self.rmt_filename},
+                what="getting upload token"
+            )["data"][self.rmt_filename]
+
         self.info("Got upload token.")
 
         self.debug("Upload token: %s", token)
@@ -599,9 +626,9 @@ class MrzyFileUploader(LoggerBase):
         Print upload progress to the terminal.
 
         Arguments:
-            cur_size: Current uploaded bytes
-            total_size: File's total size (0 if unknown)
-            speed: Upload speed (bytes per second)
+              cur_size:  Current uploaded bytes
+            total_size:  File's total size (0 if unknown)
+                 speed:  Upload speed (bytes per second)
         """
         # if we're not in terminal, or the logging level is above INFO,
         # then don't print (we're INFO-level log)
@@ -610,7 +637,7 @@ class MrzyFileUploader(LoggerBase):
             return
 
         print(
-            "{:.2f}%     {}/{}     {}/s               ".format(
+            "       {:.2f}%     {}/{}     {}/s          ".format(
                 0 if not total_size else (cur_size / total_size * 100),
                 self.size_to_human_readable(cur_size),
                 self.size_to_human_readable(total_size),
@@ -625,7 +652,6 @@ class MrzyFileUploader(LoggerBase):
         The most important one. :)"""
 
         self.info('Preparing to uploading file "%s"...', self.src_filename)
-        self.mrzy_account_obj.login()
         self.get_upload_token()
 
         uploaded = 0
@@ -668,6 +694,8 @@ class MrzyFileUploader(LoggerBase):
     
             if self.add_to_filelist:
                 self.commit_to_mrzy(self.filesize or uploaded) # in case it's stdin or pipe, etc.
+        else:
+            self.info("Dry run, not really uploading")
 
         self.debug("End at %s", datetime.datetime.now().ctime())
         print(self.file_link, file=self.output_link_file)
@@ -697,6 +725,50 @@ class MrzyFileUploader(LoggerBase):
         )
         self.info("Commited.")
 
+class MrzyBatchFileUploader(LoggerBase):
+    """A class that wraps MrzyFileUploader, and calls Get Token API once for multiple files."""
+    
+    def __init__(self):
+        """Create a file uploader instance."""
+        self.mrzy_file_uploader_objs = []
+
+    def add_new_file(self, *args, **kwargs):
+        """Add a new file entry.
+        All arguments are the same as MrzyFileUploader.__init__.
+        """
+        self.debug("Adding new file with the following arguments:")
+        for i in args:
+            self.debug("%s", i)
+        self.debug("----------")
+        for k, v in kwargs.items():
+            self.debug('%s="%s"', k, v)
+
+        self.mrzy_file_uploader_objs.append(MrzyFileUploader(*args, **kwargs))
+
+    def upload_file(self):
+        """Begin the upload.
+        Get all tokens at one time and set them, then start uploading.
+        """
+        # the user account for uploading file seems does not matter, so just choose
+        # one account and use it
+        
+        upload_tokens = (
+            self
+            .mrzy_file_uploader_objs[0]
+            .mrzy_account_obj
+            .send_mrzy_request(
+                "https://lulu.lulufind.com/mrzy/mrzypc/getQiniuToken" +
+                ("" if any(i.get_token_api == 1 for i in self.mrzy_file_uploader_objs) else "V2"),
+    
+                data={"keys": ','.join(i.rmt_filename for i in self.mrzy_file_uploader_objs)},
+                what="getting upload tokens"
+            )["data"]
+        )
+         
+        for i in self.mrzy_file_uploader_objs:
+            i.qiniu_uploader_obj.upload_token = upload_tokens[i.rmt_filename]
+            i.upload_file()
+
 def print_help(prog_name):
     print(
         f"""\
@@ -708,9 +780,10 @@ Note: before using this tool, make sure you have bound a password account!
 
   -d, --disable                       Disable the pre-loaded configuration
   -C, --config                        Load a config (use - for stdin, see below)
+  -D, --def-config  <file_name>       Load an alternative default config (see below)
   -q, --quiet                         Let the program shut up (set the logging level to CRITICAL)
       This option will override any other logging level settings
-  -l, --logging <logging_level>       Adjust the logging level (default INFO)
+  -l, --logging  <logging_level>      Adjust the logging level (default INFO)
       (possible values: DEBUG, INFO, WARNING, ERROR, CRITICAL)
   -u, --user  <username>              (pre-file) Username for login
   -p, --pass  <password>              (pre-file) Password for login
@@ -745,7 +818,8 @@ e.g.:
     --add-to-filelist
 Recursive configuration file will not be loaded
 A default configuration named ~/.mrzynetdiskrc will be loaded at startup
-(suitable for specifying password file, etc.)\
+(suitable for specifying password file, etc.)
+Use -D to load another default config\
 """,
         file=sys.stderr
     )
@@ -754,6 +828,7 @@ def main(argc, argv):
     def parse_command_line(iterable, file_entry_list):
         nonlocal logging_level
         nonlocal no_load_def_config
+        nonlocal alt_def_config
         global no_upload_to_root_dir_warning
         global no_upload_to_existing_file_warning
 
@@ -776,6 +851,9 @@ def main(argc, argv):
 
             elif option in ("-C", "--config"):
                 load_config.append(next(iterable))
+
+            elif option in ("-D", "--def-config"):
+                alt_def_config = next(iterable)
 
             elif option in ("-q", "--quiet"):
                 logging_level = "!CRITICAL"
@@ -857,11 +935,13 @@ def main(argc, argv):
         print_help(argv[0])
         return 1
 
+    batch_uploader_obj = MrzyBatchFileUploader()
     file_entry = []
     no_load_def_config = False
     def_config = {}
     load_config = []
     logging_level = "INFO"
+    alt_def_config = None
 
     parse_command_line(argv[1:], file_entry)
     for i in load_config:
@@ -877,13 +957,17 @@ def main(argc, argv):
                 parse_command_line(map(lambda l: l.strip(), f), [def_config])
         except FileNotFoundError:
             pass
-        else:
-            # strip out filename from def config
-            def_config.pop("src_filepath", None)
-    
-            for fo in file_entry:
-                for k, v in def_config.items():
-                    fo.setdefault(k, v)
+
+    if alt_def_config is not None:
+        with open(alt_def_config, encoding="locale") as f:
+            parse_command_line(map(lambda l: l.strip(), f), [def_config])
+
+    # strip out filename from def config
+    def_config.pop("src_filepath", None)
+
+    for fo in file_entry:
+        for k, v in def_config.items():
+            fo.setdefault(k, v)
 
     if not file_entry:
         print_help(argv[0])
@@ -893,7 +977,7 @@ def main(argc, argv):
     _empty = object()
 
     for file in file_entry:
-        logging.debug("Initializing MrzyFileUploader with the following arguments:")
+        logging.debug("Initializing MrzyBatchFileUploader with the following arguments:")
         for k, v in file.items():
             logging.debug('%s="%s"', k, v)
 
@@ -905,7 +989,9 @@ def main(argc, argv):
             logging.error("This file will be ignored.")
             continue
 
-        MrzyFileUploader(**file).upload_file()
+        batch_uploader_obj.add_new_file(**file)
+
+    batch_uploader_obj.upload_file()
 
     return 0
 
