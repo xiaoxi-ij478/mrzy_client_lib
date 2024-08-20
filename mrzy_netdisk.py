@@ -35,23 +35,30 @@ no_upload_to_existing_file_warning = False
 # there's no way to change this from command line, to prevent from abuse
 no_check_existing_files = True
 
+
 class BaseError(Exception):
     "The base class for all the errors"
+
 
 class RequestError(BaseError):
     "Error while requesting the server."
 
+
 class UploadError(BaseError):
     "Error while uploading."
+
 
 class NoUploadToRootDirectoryError(UploadError):
     "Error when trying to upload to root directory."
 
+
 class NoUploadToExistingFileError(UploadError):
     "Error when trying to upload to existing files."
 
+
 class CommandLineError(BaseError):
     "Error while parsing command line."
+
 
 class LoggerBase:
     "Simple mixin logger class using `logging` module."
@@ -527,10 +534,10 @@ class MrzyFileUploader(LoggerBase):
                 self.warning("If this is not what you want, STOP RIGHT NOW!!!!!!!!!!!!")
             else:
                 raise NoUploadToRootDirectoryError(
-                "Uploading to root directory is VERY DANGEROUS!!!!!! PLEASE THINK TWICE BEFORE YOU DO!!!!!!!!\n"
-                "If you really want to do so, please specify '--yes-i-want-to-upload-to-root-directory'\n"
-                "on the command line (I'll be not responsible for any disasters you make)."
-            )
+                    "Uploading to root directory is VERY DANGEROUS!!!!!! PLEASE THINK TWICE BEFORE YOU DO!!!!!!!!\n"
+                    "If you really want to do so, please specify '--yes-i-want-to-upload-to-root-directory'\n"
+                    "on the command line (I'll be not responsible for any disasters you make)."
+                )
 
         if get_token_api == 1:
             self.warning("Use of Get Token API v1 is discouraged.")
