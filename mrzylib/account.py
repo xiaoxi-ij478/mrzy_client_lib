@@ -27,12 +27,12 @@ class MrzyAccount(LoggerMixin):
 
     def login(self):
         self.info("Logging in...")
-        json = login.Login(
+        response_json = login.Login(
             login=self.username,
             password=self.password
         ).exec()
-        self.token = json["data"]["token"]
-        self.open_id = json["data"]["openId"]
+        self.token = response_json["data"]["token"]
+        self.open_id = response_json["data"]["openId"]
         self.info("Logged in.")
 
         self.debug("User Token: %s", self.token)
