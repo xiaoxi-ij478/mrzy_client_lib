@@ -60,7 +60,7 @@ class UploadBase(ExecAbleAPIBase):
 
         return filename
 
-    def exec(self):
+    def _exec_real(self):
         uploaded = 0
 
         self.info('Preparing to uploading file "%s"...', self.src_filename)

@@ -23,12 +23,6 @@ class MrzyAccount(LoggerMixin):
         raise NotImplementedError
 
 
-class MrzyQrCodeAccount(MrzyAccount):
-
-
-    def __new__(cls, display_qr_code_callback, *, auto_login=False):
-        
-
 class MrzyPwdAccount(MrzyAccount):
     _account_dict = {} # cache for username -> login obj
 

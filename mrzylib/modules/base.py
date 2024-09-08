@@ -10,7 +10,7 @@ from ..requester import openurl
 
 
 class JsonAPIBase(LoggerMixin):
-    def _send_request(
+    def _get_json(
         self, url, *, headers=None, data=None,
         method=None, what="sending request"
     ):
@@ -31,10 +31,45 @@ class JsonAPIBase(LoggerMixin):
 
 
 class ExecAbleAPIBase(LoggerMixin, metaclass=ABCMeta):
-    @abstractmethod
-    def exec(self):
-        raise NotImplementedError
+    def __init__(self):
+        super().__init__()
 
+        self.pre_callbacks = []
+        self.progress_callbacks = []
+        self.post_callbacks = []
+
+    def add_pre_callback(self, func):
+        self.pre_callbacks.append(func)
+        return func
+
+    def add_progress_callback(self, func):
+        self.progress_callbacks.append(func)
+        return func
+
+    def add_post_callback(self, func):
+        self.post_callbacks.append(func)
+        return func
+
+    def _call_pre_callbacks(self):
+        for func in self.pre_callbacks:
+            func(self)
+
+    def _call_progress_callbacks(self, *args, **kwargs):
+        for func in self.progress_callbacks:
+            func(self, *args, **kwargs)
+
+    def _call_post_callbacks(self):
+        for func in self.post_callbacks:
+            func(self)
+
+    def exec(self):
+        self._call_pre_callbacks()
+        self._exec_real()
+        self._call_post_callbacks()
+
+    @abstractmethod
+    def _exec_real(self):
+        raise NotImplementedError
 
 class MrzyAPIBase(JsonAPIBase, ExecAbleAPIBase):
     BASE_URL = None
@@ -52,7 +87,7 @@ class MrzyAPIBase(JsonAPIBase, ExecAbleAPIBase):
         return {}
 
     def send_request(self, data):
-        return self._send_request(
+        return self._get_json(
             os.path.join(self.BASE_URL,  self.OPERATING_PATH),
 
             headers=self.get_custom_headers(),
@@ -63,7 +98,7 @@ class MrzyAPIBase(JsonAPIBase, ExecAbleAPIBase):
 
 
 class MrzyJsonAPIBase(MrzyAPIBase):
-    def exec(self):
+    def _exec_real(self):
         return self.send_request(json.dumps(self.args).encode())
 
 
@@ -95,7 +130,7 @@ class MrzyLuluAPIBase(MrzyWithTokenAPIBase):
         self.debug("Signature: %s", signature)
         return super().get_custom_headers() | {"sign": signature}
 
-    def exec(self):
+    def _exec_real(self):
         return self.send_request("&".join(f"{k}={v}" for k, v in self.args.items()).encode())
 
 
