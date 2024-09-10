@@ -1,10 +1,11 @@
+import json
 import logging
 import urllib.error
 import urllib.request
 
 from .error import RequestError
 
-logger = logging.getLogger(__name__)
+_logger = logging.getLogger(__name__)
 
 # all requests shall be made using this function
 # so we can monitor traffic
@@ -15,16 +16,16 @@ def openurl(
 ):
     headers = headers or {}
 
-    logger.debug("Requesting '%s'", url)
+    _logger.debug("Requesting '%s'", url)
 
-    logger.debug("Headers:")
+    _logger.debug("Headers:")
     for k, v in headers.items():
         logger.debug("    '%s' = '%s'", k, v)
 
-    logger.debug("Request method: '%s'", method)
+    _logger.debug("Request method: '%s'", method)
 
     if data is not None:
-        logger.debug("Request payload: '%s'", data)
+        _logger.debug("Request payload: '%s'", data)
 
     try:
         return urllib.request.urlopen(

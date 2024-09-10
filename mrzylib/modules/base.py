@@ -11,7 +11,7 @@ from ..requester import openurl
 
 class JsonAPIBase(LoggerMixin):
     def _get_json(
-        self, url, *, headers=None, data=None,
+        self, url, *, data=None, headers=None,
         method=None, what="sending request"
     ):
         with openurl(
@@ -20,7 +20,7 @@ class JsonAPIBase(LoggerMixin):
             response_json = json.load(uf)
 
         _empty = object()
-        if response_json.get("code", _empty) not in (_empty, 200):
+        if response_json.get("code", _empty) not in (200, _empty):
             raise RequestError(
                 f"Error while {what};\nResponse JSON: {response_json}\n"
             )
@@ -31,12 +31,11 @@ class JsonAPIBase(LoggerMixin):
 
 
 class ExecAbleAPIBase(LoggerMixin, metaclass=ABCMeta):
-    def __init__(self):
-        super().__init__()
-
+    def __init__(self, **kwargs):
         self.pre_callbacks = []
         self.progress_callbacks = []
         self.post_callbacks = []
+        self.args = kwargs
 
     def add_pre_callback(self, func):
         self.pre_callbacks.append(func)
@@ -50,25 +49,20 @@ class ExecAbleAPIBase(LoggerMixin, metaclass=ABCMeta):
         self.post_callbacks.append(func)
         return func
 
-    def _call_pre_callbacks(self):
+    def _call_pre_callbacks(self, *args, **kwargs):
         for func in self.pre_callbacks:
-            func(self)
+            func(self, *args, **kwargs)
 
     def _call_progress_callbacks(self, *args, **kwargs):
         for func in self.progress_callbacks:
             func(self, *args, **kwargs)
 
-    def _call_post_callbacks(self):
+    def _call_post_callbacks(self, *args, **kwargs):
         for func in self.post_callbacks:
-            func(self)
-
-    def exec(self):
-        self._call_pre_callbacks()
-        self._exec_real()
-        self._call_post_callbacks()
+            func(self, *args, **kwargs)
 
     @abstractmethod
-    def _exec_real(self):
+    def exec(self):
         raise NotImplementedError
 
 class MrzyAPIBase(JsonAPIBase, ExecAbleAPIBase):
@@ -77,11 +71,11 @@ class MrzyAPIBase(JsonAPIBase, ExecAbleAPIBase):
     REQUEST_METHOD = None
     REQUEST_REASON = "sending request"
 
-    def __init__(self, **args):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
         if self.BASE_URL is None or self.OPERATING_PATH is None:
             raise TypeError(f"Cannot create '{self.__class__.__name__}' object")
-
-        self.args = args
 
     def get_custom_headers(self):
         return {}
@@ -98,15 +92,15 @@ class MrzyAPIBase(JsonAPIBase, ExecAbleAPIBase):
 
 
 class MrzyJsonAPIBase(MrzyAPIBase):
-    def _exec_real(self):
+    def exec(self):
         return self.send_request(json.dumps(self.args).encode())
 
 
 class MrzyWithTokenAPIBase(MrzyAPIBase):
-    def __init__(self, account_obj, **args):
-        super().__init__(**args)
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
 
-        self.account_obj = account_obj
+        self.account_obj = self.args.pop("account_obj")
 
     def get_custom_headers(self):
         return super().get_custom_headers() | {"token": self.account_obj.token}
@@ -130,9 +124,13 @@ class MrzyLuluAPIBase(MrzyWithTokenAPIBase):
         self.debug("Signature: %s", signature)
         return super().get_custom_headers() | {"sign": signature}
 
-    def _exec_real(self):
+    def exec(self):
         return self.send_request("&".join(f"{k}={v}" for k, v in self.args.items()).encode())
 
 
-class MrzyApiProdAPIBase(MrzyJsonWithTokenAPIBase):
+class MrzyApiProdWithoutTokenAPIBase(MrzyJsonAPIBase):
     BASE_URL = "https://api-prod.lulufind.com/"
+
+
+class MrzyApiProdAPIBase(MrzyApiProdWithoutTokenAPIBase, MrzyWithTokenAPIBase):
+    pass

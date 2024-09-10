@@ -31,10 +31,6 @@ class UploadBase(ExecAbleAPIBase):
             "application/octet-stream"
         )
         self.upload_token = args.pop("upload_token", None)
-        self.pre_upload_callback_list = args.pop("pre_upload_callback_list", [])
-        self.upload_progress_callback_list = args.pop("upload_progress_callback_list", [])
-        self.post_upload_callback_list = args.pop("post_upload_callback_list", [])
-
 
     def get_default_upload_filename(self):
         """Get the default upload filename.
@@ -60,7 +56,7 @@ class UploadBase(ExecAbleAPIBase):
 
         return filename
 
-    def _exec_real(self):
+    def exec(self):
         uploaded = 0
 
         self.info('Preparing to uploading file "%s"...', self.src_filename)
@@ -86,18 +82,15 @@ class UploadBase(ExecAbleAPIBase):
             file_obj.seek(0, io.SEEK_END)
             file_size = file_obj.tell()
             file_obj.seek(0, io.SEEK_SET)
-            for i in self.pre_upload_callback_list:
-                i(self.src_filename, self.rmt_filename, file_size, begin_time)
+            self._call_pre_callbacks(self.src_filename, self.rmt_filename, file_size, begin_time)
 
             while buffer := file_obj.read(self.UPLOAD_SPLIT_CHUNK_SIZE):
                 uploader_obj.write_block(buffer)
                 uploaded += len(buffer)
-                for i in self.upload_progress_callback_list:
-                    i(self.src_filename, self.rmt_filename, file_size, begin_time, time.time())
+                self._call_progress_callbacks(self.src_filename, self.rmt_filename, file_size, begin_time, time.time())
 
         uploader_obj.finish_upload()
-        for i in self.post_upload_callback_list:
-            i(self.src_filename, self.rmt_filename, file_size, begin_time, time.time())
+        self._call_post_callbacks(self.src_filename, self.rmt_filename, file_size, begin_time, time.time())
 
         self.info("Upload finished.")
 
